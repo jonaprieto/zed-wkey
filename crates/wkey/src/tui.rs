@@ -273,8 +273,10 @@ impl App {
             let file = c.uri.rsplit('/').next().unwrap_or_default();
             spans.push(format!("  {file}:{}:{}", c.line + 1, c.character + 1).into());
         }
-        spans.push(if self.follow {
+        spans.push(if self.follow && self.keys {
             "  following Zed".dim()
+        } else if self.follow {
+            "  following Zed's cursor, not its keys".dim()
         } else {
             "  mode picked by hand".dim()
         });
