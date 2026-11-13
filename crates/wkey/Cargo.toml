@@ -5,6 +5,10 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
 
+[lib]
+name = "wkey"
+path = "src/lib.rs"
+
 [[bin]]
 name = "wkey"
 path = "src/main.rs"
