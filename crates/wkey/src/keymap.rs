@@ -52,7 +52,9 @@ pub fn strip_jsonc(src: &str) -> String {
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 let mut last = ' ';
-                chars.by_ref().find(|&c| std::mem::replace(&mut last, c) == '*' && c == '/');
+                chars
+                    .by_ref()
+                    .find(|&c| std::mem::replace(&mut last, c) == '*' && c == '/');
             }
             '}' | ']' => {
                 let kept = out.trim_end().len();
@@ -132,29 +134,53 @@ impl Keymap {
         Ok(())
     }
 
-    fn depth(binding: &Binding, stack: &[KeyContext]) -> Option<usize> {
-        match &binding.context {
-            Some(p) => p.depth_of(stack),
-            None => Some(stack.len()),
-        }
-    }
-
-    /// Zed's resolution: the deepest matching context wins, then the later binding.
-    // ponytail: every binding counts as a user binding, so a `null` hides all
-    // weaker ones; Zed lets a user binding beat a base-keymap `null`.
-    pub fn resolve(&self, input: &[String], stack: &[KeyContext]) -> Resolved<'_> {
-        let enabled = || {
+    /// The bindings whose context matches `stack`, with their depth. Evaluating
+    /// the predicates once keeps listing many keys cheap.
+    pub fn active(&self, stack: &[KeyContext]) -> Active<'_> {
+        Active(
             self.bindings
                 .iter()
                 .enumerate()
-                .filter_map(|(ix, b)| Some((Self::depth(b, stack)?, ix, b)))
-        };
-        let winner = enabled()
+                .filter_map(|(ix, b)| {
+                    let depth = match &b.context {
+                        Some(p) => p.depth_of(stack)?,
+                        None => stack.len(),
+                    };
+                    Some((depth, ix, b))
+                })
+                .collect(),
+        )
+    }
+
+    pub fn resolve(&self, input: &[String], stack: &[KeyContext]) -> Resolved<'_> {
+        self.active(stack).resolve(input)
+    }
+
+    pub fn next_keys(
+        &self,
+        prefix: &[String],
+        stack: &[KeyContext],
+    ) -> Vec<(String, Resolved<'_>)> {
+        self.active(stack).next_keys(prefix)
+    }
+}
+
+/// A keymap seen from one context stack: (depth, load index, binding).
+pub struct Active<'a>(Vec<(usize, usize, &'a Binding)>);
+
+impl<'a> Active<'a> {
+    /// Zed's resolution: the deepest matching context wins, then the later binding.
+    // ponytail: every binding counts as a user binding, so a `null` hides all
+    // weaker ones; Zed lets a user binding beat a base-keymap `null`.
+    pub fn resolve(&self, input: &[String]) -> Resolved<'a> {
+        let winner = self
+            .0
+            .iter()
             .filter(|(_, _, b)| b.keys == input)
-            .max_by_key(|&(depth, ix, _)| (depth, ix));
-        let first = winner.map(|(_, ix, _)| ix);
+            .max_by_key(|&&(depth, ix, _)| (depth, ix));
+        let first = winner.map(|&(_, ix, _)| ix);
         let mut pending = std::collections::HashSet::new();
-        for (_, ix, b) in enabled() {
+        for &(_, ix, b) in &self.0 {
             if b.keys.len() <= input.len() || !b.keys.starts_with(input) {
                 continue;
             }
@@ -168,25 +194,24 @@ impl Keymap {
             }
         }
         Resolved {
-            exact: winner.map(|(_, _, b)| b).filter(|b| b.action.is_some()),
+            exact: winner.map(|&(_, _, b)| b).filter(|b| b.action.is_some()),
             pending: !pending.is_empty(),
         }
     }
 
     /// The keys that can follow `prefix`, each with what pressing it does.
-    pub fn next_keys(&self, prefix: &[String], stack: &[KeyContext]) -> Vec<(String, Resolved<'_>)> {
+    pub fn next_keys(&self, prefix: &[String]) -> Vec<(String, Resolved<'a>)> {
         let next: std::collections::BTreeSet<&String> = self
-            .bindings
+            .0
             .iter()
-            .filter(|b| b.keys.len() > prefix.len() && b.keys.starts_with(prefix))
-            .filter(|b| Self::depth(b, stack).is_some())
-            .map(|b| &b.keys[prefix.len()])
+            .filter(|(_, _, b)| b.keys.len() > prefix.len() && b.keys.starts_with(prefix))
+            .map(|(_, _, b)| &b.keys[prefix.len()])
             .collect();
         next.into_iter()
             .filter_map(|key| {
                 let mut input = prefix.to_vec();
                 input.push(key.clone());
-                let r = self.resolve(&input, stack);
+                let r = self.resolve(&input);
                 (r.exact.is_some() || r.pending).then(|| (key.clone(), r))
             })
             .collect()
@@ -261,9 +286,11 @@ mod tests {
             Some(("vim::PushFindForward".into(), json!({"before": false})))
         );
         assert_eq!(k.bindings[2].action, None);
-        assert!(Keymap::default()
-            .load("[{\"context\": \"a &&\", \"bindings\": {}}]")
-            .is_err());
+        assert!(
+            Keymap::default()
+                .load("[{\"context\": \"a &&\", \"bindings\": {}}]")
+                .is_err()
+        );
     }
 
     #[test]
