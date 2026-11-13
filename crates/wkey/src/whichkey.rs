@@ -16,6 +16,21 @@ pub fn bundled(os: &str) -> Keymap {
     keymap
 }
 
+/// The bundled keymaps with the user's keymap on top. A user keymap that does
+/// not parse is skipped and its error returned, so the view still works.
+pub fn with_user(os: &str, user: Option<&str>) -> (Keymap, Option<String>) {
+    let mut keymap = bundled(os);
+    let mut mine = Keymap::default();
+    let error = match user.map(|src| mine.load(src)) {
+        Some(Err(e)) => Some(format!("skipped your keymap.json: {e:#}")),
+        _ => {
+            keymap.bindings.extend(mine.bindings);
+            None
+        }
+    };
+    (keymap, error)
+}
+
 /// Where the cursor is and what has been typed so far.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
@@ -347,5 +362,22 @@ mod tests {
         s.extension = Some("md".into());
         s.set_mode(Mode::Insert);
         assert!(has_md_binding(&s));
+    }
+
+    #[test]
+    fn user_bindings_win_and_broken_user_keymaps_are_skipped() {
+        let user = r#"[{"context": "vim_mode == normal", "bindings": {"w": "editor::SelectAll"}}]"#;
+        let (keymap, error) = with_user("macos", Some(user));
+        assert_eq!(error, None);
+        let s = State::new("macos");
+        let w = s
+            .entries(&keymap)
+            .into_iter()
+            .find(|e| e.key == "w")
+            .unwrap();
+        assert_eq!(w.action.as_deref(), Some("editor::SelectAll"));
+        let (keymap, error) = with_user("macos", Some("[{"));
+        assert!(error.is_some_and(|e| e.contains("keymap.json")));
+        assert_eq!(keymap.bindings.len(), KEYMAP.bindings.len());
     }
 }

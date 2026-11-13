@@ -3,6 +3,7 @@ const USAGE: &str = "usage: wkey [lsp]\n\n  wkey      which-key view of Zed's vi
 fn main() {
     let result = match std::env::args().nth(1).as_deref() {
         Some("lsp") => wkey::lsp::serve(),
+        None => wkey::tui::main(),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2)
