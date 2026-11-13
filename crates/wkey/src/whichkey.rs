@@ -150,8 +150,12 @@ impl State {
                 let (label, category, kind) = if r.pending {
                     let mut input = self.prefix.clone();
                     input.push(key.clone());
-                    let n = active.next_keys(&input).len();
-                    let name = group_name(&input).map(String::from).or(described);
+                    let next = active.next_keys(&input);
+                    let n = next.len();
+                    let name = group_name(&input)
+                        .map(String::from)
+                        .or(described)
+                        .or_else(|| namespace(&next));
                     let label = format!("+{}", name.unwrap_or_else(|| format!("{n} keys")));
                     (label, Category::Prefixes, Kind::Group(n))
                 } else {
@@ -232,8 +236,21 @@ fn group_name(keys: &[String]) -> Option<&'static str> {
         "[" => "previous",
         "]" => "next",
         "space" => "leader",
+        "shift-z" => "save / quit",
         _ => return None,
     })
+}
+
+/// The namespace every binding after a prefix shares, as in `+git` for
+/// `alt-cmd-g b`, `alt-cmd-g m` and `alt-cmd-g r`.
+fn namespace(next: &[(String, crate::keymap::Resolved)]) -> Option<String> {
+    let mut spaces = next.iter().map(|(_, r)| {
+        let (name, _) = r.exact?.action.as_ref()?;
+        name.split_once("::").map(|(ns, _)| ns)
+    });
+    let first = spaces.next()??;
+    (!matches!(first, "vim" | "editor") && spaces.all(|ns| ns == Some(first)))
+        .then(|| first.replace('_', " "))
 }
 
 #[cfg(test)]
@@ -366,6 +383,13 @@ mod tests {
         s.extension = Some("md".into());
         s.set_mode(Mode::Insert);
         assert!(has_md_binding(&s));
+    }
+
+    #[test]
+    fn prefixes_are_named_by_their_shared_namespace() {
+        let s = State::new("macos");
+        assert_eq!(entry(&s, "alt-cmd-g").unwrap().label, "+git");
+        assert_eq!(entry(&s, "shift-z").unwrap().label, "+save / quit");
     }
 
     #[test]
