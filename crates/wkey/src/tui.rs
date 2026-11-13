@@ -192,8 +192,9 @@ impl App {
 
     fn sections(&self) -> Vec<(Category, Vec<Entry>)> {
         let mut entries = self.state.entries(&self.keymap);
+        let mac = self.state.mac();
         entries.sort_by_cached_key(|e| {
-            let k = vim::display(&e.key);
+            let k = vim::display(&e.key, mac);
             (e.category, k.to_lowercase(), k)
         });
         let mut out: Vec<(Category, Vec<Entry>)> = vec![];
@@ -234,7 +235,13 @@ impl App {
         let badge = format!(" {} ", vim_mode.to_uppercase());
         let mut spans = vec![badge.bold().fg(Color::Black).bg(color)];
         if !self.state.typed.is_empty() {
-            let typed: Vec<_> = self.state.typed.iter().map(|k| vim::display(k)).collect();
+            let mac = self.state.mac();
+            let typed: Vec<_> = self
+                .state
+                .typed
+                .iter()
+                .map(|k| vim::display(k, mac))
+                .collect();
             spans.push(format!(" {} ", typed.join(" ")).bold().fg(color));
         }
         if let Some(c) = &self.cursor {
@@ -268,7 +275,7 @@ impl App {
             }
             lines.push(Line::from(Span::styled(title, style)));
             if open {
-                lines.extend(grid(&entries, width));
+                lines.extend(grid(&entries, width, self.state.mac()));
             }
         }
         (lines, selected_at)
@@ -304,8 +311,8 @@ const MAX_KEY: usize = 12;
 const MAX_LABEL: usize = 30;
 
 /// Entries flowed into as many columns as fit, filled top to bottom.
-fn grid(entries: &[Entry], width: usize) -> Vec<Line<'static>> {
-    let keys: Vec<String> = entries.iter().map(|e| vim::display(&e.key)).collect();
+fn grid(entries: &[Entry], width: usize, mac: bool) -> Vec<Line<'static>> {
+    let keys: Vec<String> = entries.iter().map(|e| vim::display(&e.key, mac)).collect();
     let key_w = keys
         .iter()
         .map(|k| k.chars().count())

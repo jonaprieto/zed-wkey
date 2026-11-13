@@ -85,6 +85,10 @@ impl State {
         }
     }
 
+    pub fn mac(&self) -> bool {
+        self.os == "macos"
+    }
+
     /// The `vim_mode` Zed reports, which a pending operator replaces.
     pub fn vim_mode(&self) -> &'static str {
         self.operators
@@ -186,7 +190,7 @@ impl State {
         let keys = self
             .typed
             .iter()
-            .map(|k| vim::display(k))
+            .map(|k| vim::display(k, self.mac()))
             .collect::<Vec<_>>()
             .join(" ");
         let waiting = self.operators.last().copied().filter(|op| op.waiting);
@@ -208,7 +212,7 @@ impl State {
             }
             (None, Some(op)) => Outcome::Ran {
                 keys,
-                label: format!("{} {}", op.name, vim::display(&key)),
+                label: format!("{} {}", op.name, vim::display(&key, self.mac())),
                 action: String::new(),
                 context: String::new(),
             },

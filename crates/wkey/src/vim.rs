@@ -91,19 +91,44 @@ pub fn pending_mode(op: Operator) -> &'static str {
     }
 }
 
-/// A Zed keystroke as shown: Zed's own names, except that `shift-g` is `G`
-/// and `escape` is `esc`.
-pub fn display(key: &str) -> String {
-    if let Some(c) = key.strip_prefix("shift-")
-        && c.len() == 1
-        && c.chars().all(|c| c.is_ascii_lowercase())
+/// A Zed keystroke as shown: `shift-g` is `G`, `escape` is `esc`, and
+/// modifiers are spelled out as in the keymap files, or on macOS drawn as
+/// its menus draw them, so `alt-cmd-g` is `⌥⌘G`.
+pub fn display(key: &str, mac: bool) -> String {
+    let mut mods = vec![];
+    let mut rest = key;
+    while let Some((m, tail)) = rest.split_once('-')
+        && !tail.is_empty()
+        && matches!(m, "ctrl" | "alt" | "shift" | "cmd" | "fn")
     {
-        return c.to_ascii_uppercase();
+        mods.push(m);
+        rest = tail;
     }
-    match key.strip_suffix("escape") {
-        Some(mods) => format!("{mods}esc"),
-        None => key.into(),
+    let rest = if rest == "escape" { "esc" } else { rest };
+    let letter = rest.len() == 1 && rest.chars().all(|c| c.is_ascii_lowercase());
+    if mods == ["shift"] && letter {
+        return rest.to_ascii_uppercase();
     }
+    if !mac {
+        mods.push(rest);
+        return mods.join("-");
+    }
+    let mut out: String = mods
+        .iter()
+        .map(|&m| match m {
+            "ctrl" => "⌃",
+            "alt" => "⌥",
+            "shift" => "⇧",
+            "cmd" => "⌘",
+            _ => "fn-",
+        })
+        .collect();
+    if letter && !mods.is_empty() {
+        out.push_str(&rest.to_ascii_uppercase());
+    } else {
+        out.push_str(rest);
+    }
+    out
 }
 
 /// A short human description: `vim::NextWordStart` is "next word start".
@@ -378,16 +403,31 @@ mod tests {
 
     #[test]
     fn keys_spell_out_modifiers() {
-        assert_eq!(display("shift-g"), "G");
-        assert_eq!(display("g"), "g");
-        assert_eq!(display("ctrl-w"), "ctrl-w");
-        assert_eq!(display("ctrl-shift-w"), "ctrl-shift-w");
-        assert_eq!(display("alt-shift-tab"), "alt-shift-tab");
-        assert_eq!(display("shift-tab"), "shift-tab");
-        assert_eq!(display("cmd-k"), "cmd-k");
-        assert_eq!(display("space"), "space");
-        assert_eq!(display("escape"), "esc");
-        assert_eq!(display("ctrl--"), "ctrl--");
+        let d = |k| display(k, false);
+        assert_eq!(d("shift-g"), "G");
+        assert_eq!(d("g"), "g");
+        assert_eq!(d("ctrl-w"), "ctrl-w");
+        assert_eq!(d("ctrl-shift-w"), "ctrl-shift-w");
+        assert_eq!(d("alt-shift-tab"), "alt-shift-tab");
+        assert_eq!(d("shift-tab"), "shift-tab");
+        assert_eq!(d("cmd-k"), "cmd-k");
+        assert_eq!(d("space"), "space");
+        assert_eq!(d("escape"), "esc");
+        assert_eq!(d("ctrl--"), "ctrl--");
+        assert_eq!(d("-"), "-");
+    }
+
+    #[test]
+    fn macos_draws_modifiers_as_symbols() {
+        let d = |k| display(k, true);
+        assert_eq!(d("shift-g"), "G");
+        assert_eq!(d("g"), "g");
+        assert_eq!(d("alt-cmd-g"), "⌥⌘G");
+        assert_eq!(d("ctrl-shift-w"), "⌃⇧W");
+        assert_eq!(d("alt-/"), "⌥/");
+        assert_eq!(d("shift-tab"), "⇧tab");
+        assert_eq!(d("ctrl-escape"), "⌃esc");
+        assert_eq!(d("ctrl--"), "⌃-");
     }
 
     #[test]

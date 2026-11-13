@@ -3,7 +3,8 @@
 Which-key for Zed's vim mode. A terminal panel beside the editor lists every
 key you can press next in the vim state at your cursor, in folding sections,
 flowed into columns and colored by kind: prefixes, operators, motions, text
-objects, mode switches, scrolling, edits, editor and workspace actions.
+objects, mode switches, scrolling, edits, editor and workspace actions. On
+macOS modifiers read as the menus draw them, so `alt-cmd-g` is `⌥⌘G`.
 
 ```
  OPERATOR  d   main.rs:12:5  following Zed
