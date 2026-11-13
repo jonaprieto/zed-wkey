@@ -68,8 +68,9 @@ it. `"terminal": { "dock": "right" }` puts it beside the code.
 
 ## Use
 
-Keep typing in the editor and the view follows: the file, the cursor and the
-vim mode. Focus the terminal to explore: keys go to a simulated vim, so `g`
+Keep typing in the editor and the view follows: the file, the cursor, the
+vim mode and the keys typed so far, so after `d` it lists only what can
+follow `d`. Focus the terminal to explore: keys go to a simulated vim, so `g`
 opens the `g` group, `d` shows what can follow the delete operator, and a
 finished command such as `d i w` shows its action and the context that
 enabled it at the bottom.
@@ -84,22 +85,31 @@ enabled it at the bottom.
 
 Everything else, including `esc`, goes to the simulated vim.
 
-## How the mode is known
+## How wkey knows where you are
 
-Zed tells extensions nothing about vim, so `wkey lsp` guesses from what every
-language server sees: Zed asks each server for code actions at the selection
-and sends it every edit. A non-empty selection means visual mode; a cursor
-right after text it just saw typed means insert mode; anything else means
-normal mode. The guess goes to `$XDG_RUNTIME_DIR/wkey/cursor.json` (or
-`~/.cache/wkey/cursor.json`), which the view rereads.
+Zed tells extensions nothing about vim. On macOS wkey watches the keys you
+type into Zed and plays them through the same keymaps. The watch only
+listens: it never changes a key, and it skips keys meant for other apps or
+for the wkey panel itself. The first run asks macOS to let Zed watch the
+keyboard; allow Zed under System Settings > Privacy & Security > Input
+Monitoring and restart Zed.
 
-Known gaps: Escape out of insert mode sends nothing (Zed 1.28.1 leaves the
-cursor where it is), so the view says insert until the next motion or edit;
-opening a line above with `O` reads as normal mode; replace mode is never
-detected. Pick the mode with `tab` when the guess is wrong. Only the
-contexts of a plain focused editor are modeled, so bindings for menus,
-completions and panels do not show. `base_keymap` other than the default is
-not supported.
+`wkey lsp` adds what every language server sees: Zed asks it for code
+actions at the selection and sends it every edit. That gives the file and
+the cursor, and a selection means visual mode (the mouse makes those too).
+It writes them to `$XDG_RUNTIME_DIR/wkey/cursor.json` (or
+`~/.cache/wkey/cursor.json`), which the view rereads. Without the key watch
+(on Linux, or before Zed is allowed) the mode is a guess from edits: a
+cursor right after text just typed means insert mode, anything else normal
+mode. Escape out of insert mode then goes unseen, `O` reads as normal mode
+and replace mode is never detected.
+
+Known gaps: keys typed into Zed's command palette, file finder or panels
+also reach the simulated vim, since the watch cannot tell them from the
+editor; `esc` puts it right. Keys held with ctrl, alt or cmd are read on a
+US layout. Pick the mode with `tab` when it is wrong. Only the contexts of a
+plain focused editor are modeled, so bindings for menus, completions and
+panels do not show. `base_keymap` other than the default is not supported.
 
 ## Development
 

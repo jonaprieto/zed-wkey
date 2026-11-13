@@ -75,6 +75,10 @@ pub struct App {
     /// Shown until the first command, e.g. a keymap that failed to load.
     pub notice: Option<String>,
     pub quit: bool,
+    /// Keys typed into Zed are watched, so they, not the server, give the mode.
+    pub keys: bool,
+    /// The panel has focus, so keys typed into Zed are meant for it.
+    focused: bool,
 }
 
 const HELP: &str =
@@ -92,6 +96,8 @@ impl App {
             last: None,
             notice: None,
             quit: false,
+            keys: false,
+            focused: false,
         }
     }
 
@@ -104,13 +110,39 @@ impl App {
 
     fn follow_cursor(&mut self) {
         let Some(c) = &self.cursor else { return };
-        if self.state.mode != c.mode {
-            self.state.set_mode(c.mode);
+        // With keys watched, the server only knows better about selections,
+        // which the mouse makes too.
+        let mode = match (self.keys, c.mode, self.state.mode) {
+            (false, m, _) | (true, m @ Mode::Visual, _) => m,
+            (true, _, Mode::Visual) => Mode::Normal,
+            (true, _, m) => m,
+        };
+        if self.state.mode != mode {
+            self.state.set_mode(mode);
         }
         self.state.extension = c.extension();
     }
 
+    pub fn on_focus(&mut self, focused: bool) {
+        self.focused = focused;
+    }
+
+    /// A key typed into Zed: the simulated vim takes it as Zed's vim did.
+    pub fn on_zed_key(&mut self, ev: KeyEvent) {
+        if self.focused || !self.follow {
+            return;
+        }
+        let Some(key) = zed_key(ev) else { return };
+        let outcome = self.state.press(&self.keymap, &key);
+        // Text typed in insert mode is unbound; only commands are worth showing.
+        if matches!(outcome, Outcome::Ran { .. }) {
+            self.last = Some(outcome);
+        }
+        self.selected = self.selected.min(self.sections().len().saturating_sub(1));
+    }
+
     pub fn on_key(&mut self, ev: KeyEvent) {
+        self.focused = true;
         let pending = !self.state.prefix.is_empty() || !self.state.operators.is_empty();
         match ev.code {
             KeyCode::Char('c') if ev.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
@@ -339,8 +371,25 @@ pub fn main() -> anyhow::Result<()> {
     let (keymap, notice) = crate::whichkey::with_user(os, user.as_deref());
     let mut app = App::new(keymap, os);
     app.notice = notice;
+    let (tx, keys) = std::sync::mpsc::channel();
+    match crate::keys::watch(tx) {
+        Ok(()) => app.keys = true,
+        Err(e) if cfg!(target_os = "macos") => {
+            app.notice.get_or_insert(format!("{e:#}"));
+        }
+        Err(_) => {}
+    }
+    use ratatui::crossterm::{event, execute};
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, &mut app, crate::lsp::default_cursor_path());
+    // Zed's terminal reports focus, which tells keys for the panel from keys for Zed.
+    execute!(std::io::stdout(), event::EnableFocusChange)?;
+    let result = run(
+        &mut terminal,
+        &mut app,
+        crate::lsp::default_cursor_path(),
+        &keys,
+    );
+    let _ = execute!(std::io::stdout(), event::DisableFocusChange);
     ratatui::restore();
     result
 }
@@ -349,6 +398,7 @@ fn run(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
     cursor_file: Option<std::path::PathBuf>,
+    keys: &std::sync::mpsc::Receiver<KeyEvent>,
 ) -> anyhow::Result<()> {
     use ratatui::crossterm::event::{self, Event, KeyEventKind};
     let mut seen = vec![];
@@ -366,12 +416,17 @@ fn run(
             }
             seen = bytes;
         }
+        for key in keys.try_iter() {
+            app.on_zed_key(key);
+        }
         terminal.draw(|f| app.render(f))?;
-        if event::poll(std::time::Duration::from_millis(150))?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            app.on_key(key);
+        if event::poll(std::time::Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
+                Event::FocusGained => app.on_focus(true),
+                Event::FocusLost => app.on_focus(false),
+                _ => {}
+            }
         }
         if app.quit {
             return Ok(());
@@ -522,6 +577,64 @@ mod tests {
         assert_eq!(a.state.mode, Mode::Visual);
         a.on_key(key(KeyCode::F(2)));
         assert!(a.follow);
+        assert_eq!(a.state.mode, Mode::Normal);
+    }
+
+    fn at(mode: Mode) -> Cursor {
+        Cursor {
+            uri: "file:///p/main.rs".into(),
+            line: 0,
+            character: 0,
+            mode,
+        }
+    }
+
+    #[test]
+    fn keys_typed_in_zed_show_what_can_follow() {
+        let mut a = app();
+        a.on_zed_key(ch('d'));
+        assert_eq!(a.state.vim_mode(), "operator");
+        assert!(screen(&a, 120, 60)[0].contains(" d "));
+        a.on_zed_key(ch('i'));
+        a.on_zed_key(ch('w'));
+        assert!(a.state.typed.is_empty());
+        assert!(shows(&screen(&a, 120, 60), "d i w →"));
+        // Escape out of insert mode, which Zed never tells the server.
+        a.on_zed_key(ch('i'));
+        a.on_zed_key(ch('x'));
+        assert_eq!(a.state.mode, Mode::Insert);
+        a.on_zed_key(key(KeyCode::Esc));
+        assert_eq!(a.state.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn keys_for_the_panel_are_not_zed_keys() {
+        let mut a = app();
+        a.on_focus(true);
+        a.on_zed_key(ch('d'));
+        assert!(a.state.typed.is_empty());
+        a.on_focus(false);
+        a.on_zed_key(ch('d'));
+        assert_eq!(a.state.vim_mode(), "operator");
+        // A key in the panel means it has focus, even before Zed says so.
+        let mut a = app();
+        a.on_key(ch('g'));
+        a.on_zed_key(ch('d'));
+        assert_eq!(a.state.typed, ["g"]);
+    }
+
+    #[test]
+    fn with_keys_the_server_only_reports_selections() {
+        let mut a = app();
+        a.keys = true;
+        a.on_zed_key(ch('a'));
+        // `a` moves the cursor, which reads as normal mode to the server.
+        a.on_cursor(at(Mode::Normal));
+        assert_eq!(a.state.mode, Mode::Insert);
+        a.on_zed_key(key(KeyCode::Esc));
+        a.on_cursor(at(Mode::Visual));
+        assert_eq!(a.state.mode, Mode::Visual);
+        a.on_cursor(at(Mode::Normal));
         assert_eq!(a.state.mode, Mode::Normal);
     }
 }
