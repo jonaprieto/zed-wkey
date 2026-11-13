@@ -1,0 +1,15 @@
+[package]
+name = "wkey-cli"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[[bin]]
+name = "wkey"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
