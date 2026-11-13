@@ -37,20 +37,34 @@ argument, since Zed then runs it as is:
 "lsp": { "wkey": { "binary": { "path": "/path/to/wkey", "arguments": ["lsp"] } } }
 ```
 
-Open the view from a Zed terminal with `wkey`, or add a task to
+Open the view from a Zed terminal with `wkey`. Extensions cannot ship global
+tasks or keybindings, so to open it with one key instead, add a task to
 `~/.config/zed/tasks.json`:
 
 ```json
-[{ "label": "wkey", "command": "wkey", "reveal": "always", "allow_concurrent_runs": false }]
+[
+  {
+    "label": "wkey",
+    "command": "wkey",
+    "use_new_terminal": false,
+    "allow_concurrent_runs": true,
+    "reveal": "no_focus",
+    "hide": "on_success",
+    "show_summary": false,
+    "show_command": false
+  }
+]
 ```
 
-and, to open it from the keyboard, a binding to your keymap:
+and a binding to `~/.config/zed/keymap.json`:
 
 ```json
 { "context": "Workspace", "bindings": { "alt-shift-k": ["task::Spawn", { "task_name": "wkey" }] } }
 ```
 
-`"terminal": { "dock": "right" }` puts it beside the code.
+The key opens the view without taking focus from the editor; pressing it
+again restarts the view in the same terminal, and `C-c` in the view closes
+it. `"terminal": { "dock": "right" }` puts it beside the code.
 
 ## Use
 
