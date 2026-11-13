@@ -174,16 +174,17 @@ fn words(camel: &str) -> String {
     out
 }
 
+/// Sections in the order they are shown: what edits text first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
-    Prefixes,
     Operators,
     Motions,
     Objects,
-    Modes,
-    Scroll,
     Edit,
+    Modes,
+    Prefixes,
     Editor,
+    Scroll,
     Workspace,
 }
 
@@ -204,8 +205,14 @@ impl Category {
 }
 
 pub fn category(action: &str, args: &Value) -> Category {
-    if operator(action, args).is_some() {
-        return Category::Operators;
+    if let Some(op) = operator(action, args) {
+        // Operators that wait for a character are motions or edits in use.
+        return match op.id {
+            "f" | "F" | "t" | "T" | "s" | "S" | "'" | "`" => Category::Motions,
+            "a" | "i" => Category::Objects,
+            "r" | "^K" | "^V" | "\"" | "q" | "@" | "m" => Category::Edit,
+            _ => Category::Operators,
+        };
     }
     let (namespace, name) = action.split_once("::").unwrap_or(("", action));
     let scroll = name.starts_with("Scroll") || matches!(name, "LineUp" | "LineDown");
@@ -463,6 +470,9 @@ mod tests {
     fn actions_fall_into_sections() {
         let cat = |a: &str| category(a, &Value::Null);
         assert_eq!(cat("vim::PushYank"), Category::Operators);
+        assert_eq!(cat("vim::PushFindForward"), Category::Motions);
+        assert_eq!(cat("vim::PushObject"), Category::Objects);
+        assert_eq!(cat("vim::PushRegister"), Category::Edit);
         assert_eq!(cat("vim::NextWordStart"), Category::Motions);
         assert_eq!(cat("vim::MoveToNextMatch"), Category::Motions);
         assert_eq!(cat("vim::Word"), Category::Objects);

@@ -91,7 +91,7 @@ impl App {
             state: State::new(os),
             follow: true,
             cursor: None,
-            collapsed: BTreeSet::new(),
+            collapsed: BTreeSet::from([Category::Scroll]),
             selected: 0,
             last: None,
             notice: None,
@@ -192,10 +192,21 @@ impl App {
 
     fn sections(&self) -> Vec<(Category, Vec<Entry>)> {
         let mut entries = self.state.entries(&self.keymap);
-        let mac = self.state.mac();
+        // Letters and digits first, `g` before `G`, then symbols, then named and modified keys.
         entries.sort_by_cached_key(|e| {
-            let k = vim::display(&e.key, mac);
-            (e.category, k.to_lowercase(), k)
+            let base = e.key.strip_prefix("shift-").filter(|k| k.len() == 1);
+            let base = base.unwrap_or(&e.key);
+            let rank = match base.chars().next() {
+                _ if base.chars().count() > 1 => 2,
+                Some(c) if c.is_ascii_alphanumeric() => 0,
+                _ => 1,
+            };
+            (
+                e.category,
+                rank,
+                base.to_lowercase(),
+                e.key.starts_with("shift-"),
+            )
         });
         let mut out: Vec<(Category, Vec<Entry>)> = vec![];
         for e in entries {
@@ -545,15 +556,16 @@ mod tests {
     fn enter_folds_the_selected_section() {
         let mut a = app();
         let open = screen(&a, 120, 60);
-        let first = open.iter().find(|r| r.contains('▾')).unwrap().clone();
+        assert!(open[1].contains("▾ Operators"), "{}", open[1]);
+        assert!(shows(&screen(&a, 120, 300), "▸ Scroll"));
         a.on_key(key(KeyCode::Enter));
         let folded = screen(&a, 120, 60);
-        assert!(folded.iter().any(|r| r.contains('▸')));
-        assert!(!shows(&folded, "+go to / more"), "{first}");
+        assert!(folded[1].contains("▸ Operators"), "{}", folded[1]);
+        assert!(!shows(&folded, "d → delete"));
         a.on_key(key(KeyCode::Down));
         a.on_key(key(KeyCode::Up));
         a.on_key(key(KeyCode::Enter));
-        assert!(shows(&screen(&a, 120, 60), "+go to / more"));
+        assert!(shows(&screen(&a, 120, 60), "d → delete"));
     }
 
     #[test]
