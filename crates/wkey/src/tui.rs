@@ -11,7 +11,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The Zed keystroke for a terminal key event, e.g. `ctrl-w` or `shift-g`.
 pub fn zed_key(ev: KeyEvent) -> Option<String> {
@@ -73,6 +73,8 @@ pub struct App {
     selected: usize,
     /// Lines scrolled past the selected section's title.
     offset: usize,
+    /// Keys another app takes before Zed sees them, with what it does instead.
+    pub taken: BTreeMap<String, String>,
     last: Option<Outcome>,
     /// Shown until the first command, e.g. a keymap that failed to load.
     pub notice: Option<String>,
@@ -95,6 +97,7 @@ impl App {
             collapsed: BTreeSet::from([Category::Scroll]),
             selected: 0,
             offset: 0,
+            taken: BTreeMap::new(),
             last: None,
             notice: None,
             quit: false,
@@ -304,7 +307,7 @@ impl App {
             }
             lines.push(Line::from(Span::styled(title, style)));
             if open {
-                let grid = grid(&entries, width, self.state.mac());
+                let grid = grid(&entries, width, self.state.mac(), &self.taken);
                 if i == self.selected {
                     rows = grid.len();
                 }
@@ -343,8 +346,14 @@ impl App {
 const MAX_KEY: usize = 12;
 const MAX_LABEL: usize = 30;
 
-/// Entries flowed into as many columns as fit, filled top to bottom.
-fn grid(entries: &[Entry], width: usize, mac: bool) -> Vec<Line<'static>> {
+/// Entries flowed into as many columns as fit, filled top to bottom. Keys
+/// another app takes are struck out and say which app.
+fn grid(
+    entries: &[Entry],
+    width: usize,
+    mac: bool,
+    taken: &BTreeMap<String, String>,
+) -> Vec<Line<'static>> {
     let keys: Vec<String> = entries.iter().map(|e| vim::display(&e.key, mac)).collect();
     let key_w = keys
         .iter()
@@ -373,11 +382,15 @@ fn grid(entries: &[Entry], width: usize, mac: bool) -> Vec<Line<'static>> {
                     Kind::Operator => Color::Yellow,
                     Kind::Action => Color::Cyan,
                 };
-                spans.push(
-                    format!("{:>key_w$}", fit(&keys[c * rows + r], key_w))
-                        .bold()
-                        .fg(color),
-                );
+                let key = format!("{:>key_w$}", fit(&keys[c * rows + r], key_w));
+                if let Some(command) = taken.get(&e.key) {
+                    spans.push(key.crossed_out().fg(Color::Red));
+                    spans.push(" → ".dim());
+                    let label = format!("tess {command}: {}", e.label);
+                    spans.push(format!("{:<w$}", fit(&label, label_w), w = label_w + 2).dim());
+                    continue;
+                }
+                spans.push(key.bold().fg(color));
                 spans.push(" → ".dim());
                 let label = format!("{:<w$}", fit(&e.label, label_w), w = label_w + 2);
                 spans.push(match e.kind {
@@ -411,6 +424,7 @@ pub fn main() -> anyhow::Result<()> {
     let (keymap, notice) = crate::whichkey::with_user(os, user.as_deref());
     let mut app = App::new(keymap, os);
     app.notice = notice;
+    app.taken = crate::whichkey::installed_tess_keys();
     let (tx, keys) = std::sync::mpsc::channel();
     match crate::keys::watch(tx) {
         Ok(()) => app.keys = true,
@@ -612,6 +626,15 @@ mod tests {
         a.on_key(ch('g'));
         a.on_key(ch('j'));
         assert!(a.state.typed.is_empty(), "g j is a vim command");
+    }
+
+    #[test]
+    fn keys_another_app_takes_are_struck_out() {
+        let mut a = app();
+        a.state.set_mode(Mode::Insert);
+        a.taken = [("alt-/".to_string(), "flip".to_string())].into();
+        let s = screen(&mut a, 120, 300);
+        assert!(shows(&s, "⌥/ → tess flip: which key"), "{}", s.join("\n"));
     }
 
     #[test]

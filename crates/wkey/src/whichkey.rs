@@ -1,7 +1,9 @@
 //! The which-key model: the keys available in a vim state, and what pressing one does.
 use crate::context::KeyContext;
-use crate::keymap::Keymap;
+use crate::keymap::{Keymap, canonical, strip_jsonc};
 use crate::vim::{self, Category, Mode, Operator};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Zed's bundled keymaps for `os` ("macos" or "linux"): the defaults, then vim.
 pub fn bundled(os: &str) -> Keymap {
@@ -29,6 +31,72 @@ pub fn with_user(os: &str, user: Option<&str>) -> (Keymap, Option<String>) {
         }
     };
     (keymap, error)
+}
+
+/// Keys tess (a macOS window manager) takes before Zed sees them, as Zed
+/// keystrokes, with the tess command: its built-in main mode, then the
+/// user's `~/.config/tess/config.json` on top, where `null` drops a key.
+pub fn tess_keys(configs: &[&str]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for src in configs {
+        let Ok(v) = serde_json::from_str::<Value>(&strip_jsonc(src)) else {
+            continue;
+        };
+        for (key, command) in v["modes"]["main"].as_object().into_iter().flatten() {
+            let key = tess_key(key);
+            match command.as_str() {
+                Some(c) => out.insert(key, c.to_string()),
+                None => out.remove(&key),
+            };
+        }
+    }
+    out
+}
+
+/// `alt-slash` is `alt-/`.
+// ponytail: shifted symbols stay `alt-shift-/`; Zed may bind them as `alt-?`.
+fn tess_key(spec: &str) -> String {
+    let (mods, key) = match spec.rsplit_once('-') {
+        Some((mods, key)) if !key.is_empty() => (Some(mods), key),
+        _ => (None, spec),
+    };
+    let key = match key {
+        "slash" => "/",
+        "backslash" => "\\",
+        "minus" => "-",
+        "equal" => "=",
+        "period" => ".",
+        "comma" => ",",
+        "quote" => "'",
+        "semicolon" => ";",
+        "backtick" => "`",
+        "leftSquareBracket" => "[",
+        "rightSquareBracket" => "]",
+        "esc" => "escape",
+        k => k,
+    };
+    canonical(&match mods {
+        Some(mods) => format!("{mods}-{key}"),
+        None => key.into(),
+    })
+}
+
+/// [`tess_keys`] from the installed tess, or none without it.
+pub fn installed_tess_keys() -> BTreeMap<String, String> {
+    let Some(defaults) = std::process::Command::new("tess")
+        .arg("default-config")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+    else {
+        return BTreeMap::new();
+    };
+    let user = std::env::var("HOME")
+        .ok()
+        .and_then(|home| std::fs::read_to_string(format!("{home}/.config/tess/config.json")).ok())
+        .unwrap_or_default();
+    tess_keys(&[&defaults, &user])
 }
 
 /// Where the cursor is and what has been typed so far.
@@ -390,6 +458,23 @@ mod tests {
         let s = State::new("macos");
         assert_eq!(entry(&s, "alt-cmd-g").unwrap().label, "+git");
         assert_eq!(entry(&s, "shift-z").unwrap().label, "+save / quit");
+    }
+
+    #[test]
+    fn tess_keys_merge_the_user_config_over_the_defaults() {
+        let defaults = r#"{"modes": {"main": {"alt-slash": "flip", "alt-shift-k": "move up",
+            "cmd-alt-h": "nop", "alt-enter": "fullscreen"}, "tess": {"h": "focus left"}}}"#;
+        let user = r#"{"modes": {"main": {"alt-enter": null, "cmd-alt-ctrl-shift-g": "pick"}}}"#;
+        let keys = tess_keys(&[defaults, user, "not json"]);
+        assert_eq!(
+            keys.into_iter().collect::<Vec<_>>(),
+            [
+                ("alt-/".into(), "flip".into()),
+                ("alt-cmd-h".into(), "nop".into()),
+                ("alt-shift-k".into(), "move up".into()),
+                ("ctrl-alt-shift-cmd-g".into(), "pick".into()),
+            ]
+        );
     }
 
     #[test]

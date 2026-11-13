@@ -107,6 +107,11 @@ cursor right after text just typed means insert mode, anything else normal
 mode. Escape out of insert mode then goes unseen, `O` reads as normal mode
 and replace mode is never detected.
 
+Keys that [tess](https://github.com/jonaprieto/tess) takes for itself never
+reach Zed, so when `tess` is installed wkey reads its key bindings
+(`tess default-config` and `~/.config/tess/config.json`) and strikes those
+keys out, naming the tess command that runs instead.
+
 Known gaps: keys typed into Zed's command palette, file finder or panels
 also reach the simulated vim, since the watch cannot tell them from the
 editor; `esc` puts it right. Keys held with ctrl, alt or cmd are read on a
