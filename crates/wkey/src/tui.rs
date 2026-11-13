@@ -71,6 +71,8 @@ pub struct App {
     cursor: Option<Cursor>,
     collapsed: BTreeSet<Category>,
     selected: usize,
+    /// Lines scrolled past the selected section's title.
+    offset: usize,
     last: Option<Outcome>,
     /// Shown until the first command, e.g. a keymap that failed to load.
     pub notice: Option<String>,
@@ -81,8 +83,7 @@ pub struct App {
     focused: bool,
 }
 
-const HELP: &str =
-    "keys go to vim · tab mode · f2 follow Zed · ↑↓ section · ⏎ fold · ⌫ back · ctrl-c quit";
+const HELP: &str = "keys go to vim · tab mode · f2 follow Zed · ↑↓ section · j k scroll · ⏎ fold · ⌫ back · ctrl-c quit";
 
 impl App {
     pub fn new(keymap: Keymap, os: &str) -> Self {
@@ -93,6 +94,7 @@ impl App {
             cursor: None,
             collapsed: BTreeSet::from([Category::Scroll]),
             selected: 0,
+            offset: 0,
             last: None,
             notice: None,
             quit: false,
@@ -163,9 +165,18 @@ impl App {
                 self.follow = true;
                 self.follow_cursor();
             }
-            KeyCode::Up => self.selected = self.selected.saturating_sub(1),
+            KeyCode::Up => {
+                self.selected = self.selected.saturating_sub(1);
+                self.offset = 0;
+            }
             KeyCode::Down => {
-                self.selected = (self.selected + 1).min(self.sections().len().saturating_sub(1))
+                self.selected = (self.selected + 1).min(self.sections().len().saturating_sub(1));
+                self.offset = 0;
+            }
+            // `j` and `k` only mean something to vim after a prefix or operator.
+            KeyCode::Char('j') if ev.modifiers.is_empty() && !pending => self.offset += 1,
+            KeyCode::Char('k') if ev.modifiers.is_empty() && !pending => {
+                self.offset = self.offset.saturating_sub(1)
             }
             KeyCode::Enter => {
                 if let Some(&(category, _)) = self.sections().get(self.selected)
@@ -218,7 +229,7 @@ impl App {
         out
     }
 
-    pub fn render(&self, frame: &mut Frame) {
+    pub fn render(&mut self, frame: &mut Frame) {
         let [header, body, detail, help] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
@@ -227,8 +238,11 @@ impl App {
         ])
         .areas(frame.area());
         frame.render_widget(Paragraph::new(self.header()), header);
-        let (lines, selected_at) = self.body(body.width as usize);
-        let scroll = selected_at.saturating_sub(body.height as usize * 2 / 3);
+        let (lines, selected_at, rows) = self.body(body.width as usize);
+        // The selected title on top, scrolled at most through its own section.
+        let last = lines.len().saturating_sub(body.height as usize);
+        let scroll = (selected_at + self.offset.min(rows)).min(last);
+        self.offset = scroll.saturating_sub(selected_at);
         frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), body);
         frame.render_widget(Paragraph::new(self.detail()), detail);
         frame.render_widget(Paragraph::new(HELP.dim()), help);
@@ -267,10 +281,12 @@ impl App {
         Line::from(spans)
     }
 
-    /// The sections as lines, and the line of the selected section's title.
-    fn body(&self, width: usize) -> (Vec<Line<'_>>, usize) {
+    /// The sections as lines, the line of the selected section's title and
+    /// the number of lines under it.
+    fn body(&self, width: usize) -> (Vec<Line<'static>>, usize, usize) {
         let mut lines = vec![];
         let mut selected_at = 0;
+        let mut rows = 0;
         for (i, (category, entries)) in self.sections().into_iter().enumerate() {
             let open = !self.collapsed.contains(&category);
             let title = format!(
@@ -286,10 +302,14 @@ impl App {
             }
             lines.push(Line::from(Span::styled(title, style)));
             if open {
-                lines.extend(grid(&entries, width, self.state.mac()));
+                let grid = grid(&entries, width, self.state.mac());
+                if i == self.selected {
+                    rows = grid.len();
+                }
+                lines.extend(grid);
             }
         }
-        (lines, selected_at)
+        (lines, selected_at, rows)
     }
 
     fn detail(&self) -> Line<'_> {
@@ -470,7 +490,7 @@ mod tests {
         App::new(bundled("macos"), "macos")
     }
 
-    fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+    fn screen(app: &mut App, width: u16, height: u16) -> Vec<String> {
         let mut t = Terminal::new(TestBackend::new(width, height)).unwrap();
         t.draw(|f| app.render(f)).unwrap();
         rows(t.backend().buffer())
@@ -508,7 +528,7 @@ mod tests {
 
     #[test]
     fn shows_mode_sections_and_bindings() {
-        let s = screen(&app(), 120, 60);
+        let s = screen(&mut app(), 120, 60);
         assert!(s[0].contains("NORMAL"), "{}", s[0]);
         for text in [
             "Motions",
@@ -523,8 +543,8 @@ mod tests {
 
     #[test]
     fn wide_terminals_use_columns() {
-        let narrow = screen(&app(), 40, 200);
-        let wide = screen(&app(), 160, 200);
+        let narrow = screen(&mut app(), 40, 200);
+        let wide = screen(&mut app(), 160, 200);
         let row_with =
             |s: &[String], a: &str, b: &str| s.iter().any(|r| r.contains(a) && r.contains(b));
         assert!(!row_with(&narrow, "next word start", "previous word start"));
@@ -538,11 +558,11 @@ mod tests {
     fn typing_follows_prefixes_and_reports_commands() {
         let mut a = app();
         a.on_key(ch('g'));
-        let s = screen(&a, 120, 60);
+        let s = screen(&mut a, 120, 60);
         assert!(s[0].contains(" g "), "{}", s[0]);
         assert!(shows(&s, "start of document"));
         a.on_key(ch('g'));
-        let s = screen(&a, 120, 60);
+        let s = screen(&mut a, 120, 60);
         assert!(shows(&s, "g g → start of document"), "{}", s.join("\n"));
         assert!(shows(&s, "vim::StartOfDocument"));
         a.on_key(ch('d'));
@@ -555,17 +575,41 @@ mod tests {
     #[test]
     fn enter_folds_the_selected_section() {
         let mut a = app();
-        let open = screen(&a, 120, 60);
+        let open = screen(&mut a, 120, 60);
         assert!(open[1].contains("▾ Operators"), "{}", open[1]);
-        assert!(shows(&screen(&a, 120, 300), "▸ Scroll"));
+        assert!(shows(&screen(&mut a, 120, 300), "▸ Scroll"));
         a.on_key(key(KeyCode::Enter));
-        let folded = screen(&a, 120, 60);
+        let folded = screen(&mut a, 120, 60);
         assert!(folded[1].contains("▸ Operators"), "{}", folded[1]);
         assert!(!shows(&folded, "d → delete"));
         a.on_key(key(KeyCode::Down));
         a.on_key(key(KeyCode::Up));
         a.on_key(key(KeyCode::Enter));
-        assert!(shows(&screen(&a, 120, 60), "d → delete"));
+        assert!(shows(&screen(&mut a, 120, 60), "d → delete"));
+    }
+
+    #[test]
+    fn j_and_k_scroll_the_selected_section_unless_vim_waits() {
+        let mut a = app();
+        a.on_key(key(KeyCode::Down));
+        let top = screen(&mut a, 40, 12);
+        assert!(top[1].contains("Motions"), "{}", top[1]);
+        a.on_key(ch('j'));
+        a.on_key(ch('j'));
+        let down = screen(&mut a, 40, 12);
+        assert_eq!(down[1], top[3]);
+        a.on_key(ch('k'));
+        assert_eq!(screen(&mut a, 40, 12)[1], top[2]);
+        // Past the section's end `j` stops, so one `k` always moves back.
+        for _ in 0..500 {
+            a.on_key(ch('j'));
+        }
+        let end = screen(&mut a, 40, 12);
+        a.on_key(ch('k'));
+        assert_ne!(screen(&mut a, 40, 12), end);
+        a.on_key(ch('g'));
+        a.on_key(ch('j'));
+        assert!(a.state.typed.is_empty(), "g j is a vim command");
     }
 
     #[test]
@@ -580,7 +624,7 @@ mod tests {
         a.on_cursor(cursor.clone());
         assert_eq!(a.state.mode, Mode::Insert);
         assert_eq!(a.state.extension.as_deref(), Some("md"));
-        let s = screen(&a, 120, 40);
+        let s = screen(&mut a, 120, 40);
         assert!(
             s[0].contains("INSERT") && s[0].contains("notes.md:3:8"),
             "{}",
@@ -613,11 +657,11 @@ mod tests {
         let mut a = app();
         a.on_zed_key(ch('d'));
         assert_eq!(a.state.vim_mode(), "operator");
-        assert!(screen(&a, 120, 60)[0].contains(" d "));
+        assert!(screen(&mut a, 120, 60)[0].contains(" d "));
         a.on_zed_key(ch('i'));
         a.on_zed_key(ch('w'));
         assert!(a.state.typed.is_empty());
-        assert!(shows(&screen(&a, 120, 60), "d i w →"));
+        assert!(shows(&screen(&mut a, 120, 60), "d i w →"));
         // Escape out of insert mode, which Zed never tells the server.
         a.on_zed_key(ch('i'));
         a.on_zed_key(ch('x'));

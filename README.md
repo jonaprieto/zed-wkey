@@ -82,6 +82,7 @@ enabled it at the bottom.
 | `tab`, `shift-tab` | pick the mode by hand (normal, insert, visual, replace) |
 | `f2` | follow Zed's mode again |
 | `up`, `down`, `enter` | select a section, fold or unfold it |
+| `j`, `k` | scroll through the selected section, unless a prefix or operator waits |
 | `backspace` | undo the last pending key or operator |
 | `ctrl-c` | quit |
 
