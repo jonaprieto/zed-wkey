@@ -78,7 +78,7 @@ pub struct App {
 }
 
 const HELP: &str =
-    "keys go to vim · tab mode · F2 follow Zed · ↑↓ section · ⏎ fold · ⌫ back · C-c quit";
+    "keys go to vim · tab mode · f2 follow Zed · ↑↓ section · ⏎ fold · ⌫ back · ctrl-c quit";
 
 impl App {
     pub fn new(keymap: Keymap, os: &str) -> Self {
@@ -268,7 +268,7 @@ impl App {
     }
 }
 
-const MAX_KEY: usize = 8;
+const MAX_KEY: usize = 12;
 const MAX_LABEL: usize = 30;
 
 /// Entries flowed into as many columns as fit, filled top to bottom.
@@ -326,7 +326,7 @@ fn fit(s: &str, w: usize) -> String {
     }
 }
 
-/// Runs the view until `C-c`, rereading Zed's cursor file a few times a second.
+/// Runs the view until `ctrl-c`, rereading Zed's cursor file a few times a second.
 pub fn main() -> anyhow::Result<()> {
     let os = if cfg!(target_os = "macos") {
         "macos"

@@ -63,7 +63,7 @@ and a binding to `~/.config/zed/keymap.json`:
 ```
 
 The key opens the view without taking focus from the editor; pressing it
-again restarts the view in the same terminal, and `C-c` in the view closes
+again restarts the view in the same terminal, and `ctrl-c` in the view closes
 it. `"terminal": { "dock": "right" }` puts it beside the code.
 
 ## Use
@@ -76,13 +76,13 @@ enabled it at the bottom.
 
 | Key | Does |
 | --- | --- |
-| `Tab`, `S-Tab` | pick the mode by hand (normal, insert, visual, replace) |
-| `F2` | follow Zed's mode again |
-| `Up`, `Down`, `Enter` | select a section, fold or unfold it |
-| `Backspace` | undo the last pending key or operator |
-| `C-c` | quit |
+| `tab`, `shift-tab` | pick the mode by hand (normal, insert, visual, replace) |
+| `f2` | follow Zed's mode again |
+| `up`, `down`, `enter` | select a section, fold or unfold it |
+| `backspace` | undo the last pending key or operator |
+| `ctrl-c` | quit |
 
-Everything else, including `Esc`, goes to the simulated vim.
+Everything else, including `esc`, goes to the simulated vim.
 
 ## How the mode is known
 
@@ -96,7 +96,7 @@ normal mode. The guess goes to `$XDG_RUNTIME_DIR/wkey/cursor.json` (or
 Known gaps: Escape out of insert mode sends nothing (Zed 1.28.1 leaves the
 cursor where it is), so the view says insert until the next motion or edit;
 opening a line above with `O` reads as normal mode; replace mode is never
-detected. Pick the mode with `Tab` when the guess is wrong. Only the
+detected. Pick the mode with `tab` when the guess is wrong. Only the
 contexts of a plain focused editor are modeled, so bindings for menus,
 completions and panels do not show. `base_keymap` other than the default is
 not supported.

@@ -91,41 +91,19 @@ pub fn pending_mode(op: Operator) -> &'static str {
     }
 }
 
-/// Vim notation for a Zed keystroke: `shift-g` is `G`, `ctrl-w` is `C-w`.
+/// A Zed keystroke as shown: Zed's own names, except that `shift-g` is `G`
+/// and `escape` is `esc`.
 pub fn display(key: &str) -> String {
-    let mut mods = String::new();
-    let mut shift = false;
-    let mut rest = key;
-    while let Some((m, tail)) = rest.split_once('-')
-        && !tail.is_empty()
+    if let Some(c) = key.strip_prefix("shift-")
+        && c.len() == 1
+        && c.chars().all(|c| c.is_ascii_lowercase())
     {
-        match m {
-            "ctrl" => mods.push_str("C-"),
-            "alt" => mods.push_str("M-"),
-            "cmd" => mods.push_str("D-"),
-            "fn" => mods.push_str("fn-"),
-            "shift" => shift = true,
-            _ => break,
-        }
-        rest = tail;
+        return c.to_ascii_uppercase();
     }
-    let named = match rest {
-        "space" => "SPC",
-        "escape" => "ESC",
-        "enter" => "RET",
-        "tab" => "TAB",
-        "backspace" => "BS",
-        "delete" => "DEL",
-        "pageup" => "PgUp",
-        "pagedown" => "PgDn",
-        r => r,
-    };
-    let key = match (shift, named.len(), named.chars().next()) {
-        (true, 1, Some(c)) if c.is_ascii_lowercase() => c.to_ascii_uppercase().to_string(),
-        (true, ..) => format!("S-{named}"),
-        _ => named.to_string(),
-    };
-    format!("{mods}{key}")
+    match key.strip_suffix("escape") {
+        Some(mods) => format!("{mods}esc"),
+        None => key.into(),
+    }
 }
 
 /// A short human description: `vim::NextWordStart` is "next word start".
@@ -399,16 +377,17 @@ mod tests {
     }
 
     #[test]
-    fn keys_use_vim_notation() {
+    fn keys_spell_out_modifiers() {
         assert_eq!(display("shift-g"), "G");
         assert_eq!(display("g"), "g");
-        assert_eq!(display("ctrl-w"), "C-w");
-        assert_eq!(display("ctrl-shift-w"), "C-W");
-        assert_eq!(display("alt-shift-tab"), "M-S-TAB");
-        assert_eq!(display("cmd-k"), "D-k");
-        assert_eq!(display("space"), "SPC");
-        assert_eq!(display("escape"), "ESC");
-        assert_eq!(display("ctrl--"), "C--");
+        assert_eq!(display("ctrl-w"), "ctrl-w");
+        assert_eq!(display("ctrl-shift-w"), "ctrl-shift-w");
+        assert_eq!(display("alt-shift-tab"), "alt-shift-tab");
+        assert_eq!(display("shift-tab"), "shift-tab");
+        assert_eq!(display("cmd-k"), "cmd-k");
+        assert_eq!(display("space"), "space");
+        assert_eq!(display("escape"), "esc");
+        assert_eq!(display("ctrl--"), "ctrl--");
     }
 
     #[test]
