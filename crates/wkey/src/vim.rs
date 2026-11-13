@@ -210,10 +210,11 @@ pub fn category(action: &str, args: &Value) -> Category {
         "vim" if MOTIONS.contains(&name) => Category::Motions,
         "vim" if OBJECTS.contains(&name) => Category::Objects,
         "vim" if scroll => Category::Scroll,
-        "vim" if name.starts_with("Insert")
-            || name.starts_with("SwitchTo")
-            || name.starts_with("ToggleVisual")
-            || name.starts_with("ToggleReplace") =>
+        "vim"
+            if name.starts_with("Insert")
+                || name.starts_with("SwitchTo")
+                || name.starts_with("ToggleVisual")
+                || name.starts_with("ToggleReplace") =>
         {
             Category::Modes
         }
@@ -226,29 +227,117 @@ pub fn category(action: &str, args: &Value) -> Category {
 
 /// Zed's vim motions (`crates/vim/src/motion.rs`) and the search motions.
 const MOTIONS: &[&str] = &[
-    "Left", "WrappingLeft", "Right", "WrappingRight", "Up", "Down", "CurrentLine",
-    "SentenceForward", "SentenceBackward", "StartOfParagraph", "EndOfParagraph",
-    "StartOfDocument", "EndOfDocument", "GoToPercentage", "NextLineStart",
-    "PreviousLineStart", "StartOfLineDownward", "EndOfLineDownward", "GoToColumn",
-    "RepeatFind", "RepeatFindReversed", "WindowTop", "WindowMiddle", "WindowBottom",
-    "NextSectionStart", "NextSectionEnd", "PreviousSectionStart", "PreviousSectionEnd",
-    "NextMethodStart", "NextMethodEnd", "PreviousMethodStart", "PreviousMethodEnd",
-    "NextComment", "PreviousComment", "PreviousLesserIndent", "PreviousGreaterIndent",
-    "PreviousSameIndent", "NextLesserIndent", "NextGreaterIndent", "NextSameIndent",
-    "NextWordStart", "NextWordEnd", "PreviousWordStart", "PreviousWordEnd",
-    "NextSubwordStart", "NextSubwordEnd", "PreviousSubwordStart", "PreviousSubwordEnd",
-    "FirstNonWhitespace", "Matching", "EndOfLine", "StartOfLine", "MiddleOfLine",
-    "UnmatchedForward", "UnmatchedBackward", "Search", "MoveToNext", "MoveToPrevious",
-    "MoveToNextMatch", "MoveToPreviousMatch", "Tab",
+    "Left",
+    "WrappingLeft",
+    "Right",
+    "WrappingRight",
+    "Up",
+    "Down",
+    "CurrentLine",
+    "SentenceForward",
+    "SentenceBackward",
+    "StartOfParagraph",
+    "EndOfParagraph",
+    "StartOfDocument",
+    "EndOfDocument",
+    "GoToPercentage",
+    "NextLineStart",
+    "PreviousLineStart",
+    "StartOfLineDownward",
+    "EndOfLineDownward",
+    "GoToColumn",
+    "RepeatFind",
+    "RepeatFindReversed",
+    "WindowTop",
+    "WindowMiddle",
+    "WindowBottom",
+    "NextSectionStart",
+    "NextSectionEnd",
+    "PreviousSectionStart",
+    "PreviousSectionEnd",
+    "NextMethodStart",
+    "NextMethodEnd",
+    "PreviousMethodStart",
+    "PreviousMethodEnd",
+    "NextComment",
+    "PreviousComment",
+    "PreviousLesserIndent",
+    "PreviousGreaterIndent",
+    "PreviousSameIndent",
+    "NextLesserIndent",
+    "NextGreaterIndent",
+    "NextSameIndent",
+    "NextWordStart",
+    "NextWordEnd",
+    "PreviousWordStart",
+    "PreviousWordEnd",
+    "NextSubwordStart",
+    "NextSubwordEnd",
+    "PreviousSubwordStart",
+    "PreviousSubwordEnd",
+    "FirstNonWhitespace",
+    "Matching",
+    "EndOfLine",
+    "StartOfLine",
+    "MiddleOfLine",
+    "UnmatchedForward",
+    "UnmatchedBackward",
+    "Search",
+    "MoveToNext",
+    "MoveToPrevious",
+    "MoveToNextMatch",
+    "MoveToPreviousMatch",
+    "Tab",
 ];
 
 /// Zed's vim text objects (`crates/vim/src/object.rs`).
 const OBJECTS: &[&str] = &[
-    "Word", "Subword", "Sentence", "Paragraph", "Quotes", "BackQuotes", "MiniQuotes",
-    "AnyQuotes", "DoubleQuotes", "VerticalBars", "MiniBrackets", "AnyBrackets", "AnyPair",
-    "Argument", "Tag", "Method", "Class", "Comment", "IndentObj", "Parentheses",
-    "SquareBrackets", "AngleBrackets", "CurlyBrackets", "EntireFile",
+    "Word",
+    "Subword",
+    "Sentence",
+    "Paragraph",
+    "Quotes",
+    "BackQuotes",
+    "MiniQuotes",
+    "AnyQuotes",
+    "DoubleQuotes",
+    "VerticalBars",
+    "MiniBrackets",
+    "AnyBrackets",
+    "AnyPair",
+    "Argument",
+    "Tag",
+    "Method",
+    "Class",
+    "Comment",
+    "IndentObj",
+    "Parentheses",
+    "SquareBrackets",
+    "AngleBrackets",
+    "CurlyBrackets",
+    "EntireFile",
 ];
+
+/// The mode after running `action` in `mode`, `op` being the operator it completes.
+pub fn mode_after(mode: Mode, action: &str, op: Option<Operator>) -> Mode {
+    let name = action.strip_prefix("vim::").unwrap_or("");
+    let toggle = |m| if mode == m { Mode::Normal } else { m };
+    match name {
+        _ if op.is_some_and(|op| op.id == "c") => Mode::Insert,
+        n if n.starts_with("ToggleVisual") => toggle(Mode::Visual),
+        "ToggleReplace" => toggle(Mode::Replace),
+        n if n.starts_with("Insert") || n.starts_with("VisualInsert") => Mode::Insert,
+        "SwitchToInsertMode" | "Substitute" | "SubstituteLine" | "ChangeToEndOfLine" => {
+            Mode::Insert
+        }
+        "NormalBefore" | "SwitchToNormalMode" => Mode::Normal,
+        _ if mode == Mode::Visual => match category(action, &Value::Null) {
+            Category::Motions | Category::Objects | Category::Scroll => Mode::Visual,
+            _ => Mode::Normal,
+        },
+        _ => mode,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -365,5 +454,24 @@ mod tests {
         assert_eq!(cat("editor::GoToDefinition"), Category::Editor);
         assert_eq!(cat("pane::DeploySearch"), Category::Workspace);
         assert_eq!(Category::Objects.title(), "Text objects");
+    }
+
+    #[test]
+    fn mode_changes_follow_the_action() {
+        use Mode::*;
+        let after = |m, a: &str| mode_after(m, a, None);
+        assert_eq!(after(Normal, "vim::InsertBefore"), Insert);
+        assert_eq!(after(Normal, "vim::InsertLineBelow"), Insert);
+        assert_eq!(after(Insert, "vim::NormalBefore"), Normal);
+        assert_eq!(after(Normal, "vim::ToggleVisualLine"), Visual);
+        assert_eq!(after(Visual, "vim::ToggleVisual"), Normal);
+        assert_eq!(after(Normal, "vim::ToggleReplace"), Replace);
+        assert_eq!(after(Replace, "vim::NormalBefore"), Normal);
+        assert_eq!(after(Visual, "vim::NextWordStart"), Visual);
+        assert_eq!(after(Visual, "vim::VisualDelete"), Normal);
+        assert_eq!(after(Visual, "vim::Substitute"), Insert);
+        assert_eq!(after(Normal, "vim::NextWordStart"), Normal);
+        let change = operator("vim::PushChange", &Value::Null);
+        assert_eq!(mode_after(Normal, "vim::NextWordStart", change), Insert);
     }
 }
