@@ -111,6 +111,8 @@ pub struct State {
     pub prefix: Vec<String>,
     /// Everything typed since the last finished command, for display.
     pub typed: Vec<String>,
+    /// A count is being typed, so `0` adds a digit (Zed's `VimCount` context).
+    pub count: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -134,6 +136,8 @@ pub struct Entry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
     Prefix,
+    /// A digit of a count, which leaves any operator waiting.
+    Count,
     Operator(Operator),
     /// A command finished: what was typed, what it does, the action and its context.
     Ran {
@@ -180,6 +184,9 @@ impl State {
         if matches!(mode, "normal" | "visual" | "operator") {
             editor.add("VimControl");
         }
+        if self.count {
+            editor.add("VimCount");
+        }
         // Zed names the operator only while it waits for a motion.
         let operator = match self.operators.last() {
             Some(op) if mode == "operator" => op.id,
@@ -198,6 +205,7 @@ impl State {
         self.operators.clear();
         self.prefix.clear();
         self.typed.clear();
+        self.count = false;
     }
 
     /// Undoes the last key: a prefix key first, then an operator.
@@ -207,7 +215,27 @@ impl State {
         }
     }
 
+    /// The keys that can come next. The digits of a count are one entry.
     pub fn entries(&self, keymap: &Keymap) -> Vec<Entry> {
+        let mut entries = self.next_entries(keymap);
+        let digits: Vec<String> = entries
+            .iter()
+            .filter(|e| e.action.as_deref() == Some("vim::Number"))
+            .map(|e| e.key.clone())
+            .collect();
+        if digits.len() > 1 {
+            let first = entries
+                .iter()
+                .position(|e| e.key == digits[0])
+                .expect("a digit");
+            entries[first].key = format!("{}–{}", digits[0], digits[digits.len() - 1]);
+            entries[first].label = "count".into();
+            entries.retain(|e| e.action.as_deref() != Some("vim::Number") || e.key.contains('–'));
+        }
+        entries
+    }
+
+    fn next_entries(&self, keymap: &Keymap) -> Vec<Entry> {
         let active = keymap.active(&self.stack());
         active
             .next_keys(&self.prefix)
@@ -274,17 +302,25 @@ impl State {
                     self.operators.push(op);
                     return Outcome::Operator(op);
                 }
+                if name == "vim::Number" {
+                    self.prefix.clear();
+                    self.count = true;
+                    return Outcome::Count;
+                }
                 self.mode = vim::mode_after(self.mode, name, self.operators.first().copied());
                 Outcome::Ran {
                     keys,
-                    label: vim::describe(name, args),
+                    label: compose(&self.operators, &vim::describe(name, args)),
                     action: name.clone(),
                     context: binding.source.clone(),
                 }
             }
             (None, Some(op)) => Outcome::Ran {
                 keys,
-                label: format!("{} {}", op.name, vim::display(&key, self.mac())),
+                label: compose(
+                    &self.operators[..self.operators.len() - 1],
+                    &format!("{} {}", op.name, vim::display(&key, self.mac())),
+                ),
                 action: String::new(),
                 context: String::new(),
             },
@@ -293,6 +329,21 @@ impl State {
         self.reset();
         outcome
     }
+}
+
+/// What a command does with the operators before it: `d i w` deletes the
+/// inner word.
+fn compose(operators: &[Operator], what: &str) -> String {
+    let mut words: Vec<&str> = operators
+        .iter()
+        .map(|op| match op.id {
+            "i" => "inner",
+            "a" => "around",
+            _ => op.name,
+        })
+        .collect();
+    words.push(what);
+    words.join(" ")
 }
 
 /// Names for the common prefixes, as which-key plugins show them.
@@ -387,6 +438,27 @@ mod tests {
     }
 
     #[test]
+    fn counts_keep_the_operator_waiting() {
+        let mut s = State::new("macos");
+        assert_eq!(typed(&mut s, "d 2"), Outcome::Count);
+        assert_eq!(s.vim_mode(), "operator");
+        // After a digit `0` adds another, as Zed's `VimCount` context says.
+        assert_eq!(typed(&mut s, "0"), Outcome::Count);
+        let Outcome::Ran { keys, label, .. } = typed(&mut s, "w") else {
+            panic!("d 2 0 w runs")
+        };
+        assert_eq!(
+            (keys.as_str(), label.as_str()),
+            ("d 2 0 w", "delete next word start")
+        );
+        assert_eq!(s.vim_mode(), "normal");
+        // Without a count `0` is a motion, and the digits are one entry.
+        assert_eq!(action(&s, "0").as_deref(), Some("vim::StartOfLine"));
+        assert_eq!(entry(&s, "1–9").map(|e| e.label), Some("count".into()));
+        assert!(entry(&s, "5").is_none());
+    }
+
+    #[test]
     fn operators_switch_to_their_pending_bindings() {
         let mut s = State::new("macos");
         assert!(matches!(
@@ -404,7 +476,7 @@ mod tests {
             done,
             Outcome::Ran {
                 keys: "d i w".into(),
-                label: "word".into(),
+                label: "delete inner word".into(),
                 action: "vim::Word".into(),
                 context: "vim_operator == a || vim_operator == i || vim_operator == cs || vim_operator == helix_next || vim_operator == helix_previous".into(),
             }

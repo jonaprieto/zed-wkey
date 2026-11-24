@@ -195,8 +195,15 @@ mod mac {
             let mut len = 0;
             CGEventKeyboardGetUnicodeString(event, buf.len(), &mut len, buf.as_mut_ptr());
             let text = String::from_utf16_lossy(&buf[..len.min(buf.len())]);
-            if let (Some(ev), Some(tx)) = (key_event(code, CGEventGetFlags(event), &text), TX.get())
-            {
+            let flags = CGEventGetFlags(event);
+            let ev = key_event(code, flags, &text);
+            crate::log::event(format_args!(
+                "tap  code={code:#04x} flags={flags:#x} text={text:?} -> {}",
+                ev.and_then(crate::tui::zed_key)
+                    .as_deref()
+                    .unwrap_or("skipped")
+            ));
+            if let (Some(ev), Some(tx)) = (ev, TX.get()) {
                 let _ = tx.send(ev);
             }
         }

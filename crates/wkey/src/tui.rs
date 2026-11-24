@@ -6,7 +6,7 @@ use crate::whichkey::{Entry, Kind, Outcome, State};
 use ratatui::{
     Frame,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::Paragraph,
@@ -70,8 +70,11 @@ pub struct App {
     pub follow: bool,
     cursor: Option<Cursor>,
     collapsed: BTreeSet<Category>,
-    selected: usize,
-    /// Lines scrolled past the selected section's title.
+    /// The section picked by hand, kept across modes by what it is.
+    picked: Category,
+    /// The section pending keys call for, until one is picked by hand.
+    auto: Option<Category>,
+    /// Columns scrolled past the one with the selected section's title.
     offset: usize,
     /// Keys another app takes before Zed sees them, with what it does instead.
     pub taken: BTreeMap<String, String>,
@@ -85,7 +88,12 @@ pub struct App {
     focused: bool,
 }
 
-const HELP: &str = "keys go to vim · tab mode · f2 follow Zed · ↑↓ section · j k scroll · ⏎ fold · ⌫ back · ctrl-c quit";
+const HELP: &str = "⇥ ↑↓ section · ⏎ fold · j k page · f3 vim mode · f2 follow Zed · ⌫ drop key · ctrl-c quit · other keys go to vim";
+const TABS_HELP: &str = "⇥ ⇧⇥ tab · j k page · f3 vim mode · f2 follow Zed · ⌫ drop key · ctrl-c quit · other keys go to vim";
+
+/// A panel this many times wider than tall, as the bottom dock makes, shows
+/// one section at a time under a row of tabs.
+const TABS_RATIO: u16 = 4;
 
 impl App {
     pub fn new(keymap: Keymap, os: &str) -> Self {
@@ -95,7 +103,8 @@ impl App {
             follow: true,
             cursor: None,
             collapsed: BTreeSet::from([Category::Scroll]),
-            selected: 0,
+            picked: Category::Edit,
+            auto: None,
             offset: 0,
             taken: BTreeMap::new(),
             last: None,
@@ -107,10 +116,30 @@ impl App {
     }
 
     pub fn on_cursor(&mut self, cursor: Cursor) {
+        let at = format!(
+            "{}:{}:{} {:?}",
+            cursor.uri,
+            cursor.line + 1,
+            cursor.character + 1,
+            cursor.mode
+        );
         self.cursor = Some(cursor);
         if self.follow {
             self.follow_cursor();
         }
+        self.note(format_args!("cursor {at}"));
+    }
+
+    /// Logs what happened with the vim state it left.
+    fn note(&self, what: std::fmt::Arguments) {
+        crate::log::event(format_args!(
+            "{what} | {:?} {} typed={:?} follow={} focused={}",
+            self.state.mode,
+            self.state.vim_mode(),
+            self.state.typed,
+            self.follow,
+            self.focused
+        ));
     }
 
     fn follow_cursor(&mut self) {
@@ -130,20 +159,64 @@ impl App {
 
     pub fn on_focus(&mut self, focused: bool) {
         self.focused = focused;
+        self.note(format_args!("focus {focused}"));
     }
 
     /// A key typed into Zed: the simulated vim takes it as Zed's vim did.
     pub fn on_zed_key(&mut self, ev: KeyEvent) {
+        let Some(key) = zed_key(ev) else { return };
         if self.focused || !self.follow {
+            self.note(format_args!("zed   {key} ignored"));
             return;
         }
-        let Some(key) = zed_key(ev) else { return };
         let outcome = self.state.press(&self.keymap, &key);
+        self.note(format_args!("zed   {key} -> {outcome:?}"));
         // Text typed in insert mode is unbound; only commands are worth showing.
         if matches!(outcome, Outcome::Ran { .. }) {
             self.last = Some(outcome);
         }
-        self.selected = self.selected.min(self.sections().len().saturating_sub(1));
+        self.follow_pending();
+    }
+
+    /// Shows what pending keys wait for: motions after an operator, text
+    /// objects after `i` or `a`.
+    fn follow_pending(&mut self) {
+        let auto = match self.state.operators.last() {
+            Some(op) if matches!(op.id, "i" | "a") => Some(Category::Objects),
+            Some(op) if !op.waiting => Some(Category::Motions),
+            _ => None,
+        };
+        if auto != self.auto {
+            self.auto = auto;
+            self.offset = 0;
+        }
+    }
+
+    /// The selected section: the one pending keys call for, else the one
+    /// picked, else the first.
+    fn selected(&self, sections: &[(Category, Vec<Entry>)]) -> usize {
+        let find = |c: Category| sections.iter().position(|s| s.0 == c);
+        self.auto
+            .and_then(find)
+            .or_else(|| find(self.picked))
+            .unwrap_or(0)
+    }
+
+    /// Picks the next or previous section, wrapping around.
+    fn step(&mut self, forward: bool) {
+        let sections = self.sections();
+        let n = sections.len().max(1);
+        let i = self.selected(&sections);
+        let j = if forward {
+            (i + 1) % n
+        } else {
+            (i + n - 1) % n
+        };
+        if let Some(&(category, _)) = sections.get(j) {
+            self.picked = category;
+        }
+        self.auto = None;
+        self.offset = 0;
     }
 
     pub fn on_key(&mut self, ev: KeyEvent) {
@@ -151,15 +224,17 @@ impl App {
         let pending = !self.state.prefix.is_empty() || !self.state.operators.is_empty();
         match ev.code {
             KeyCode::Char('c') if ev.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
-            KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Tab | KeyCode::Down => self.step(true),
+            KeyCode::BackTab | KeyCode::Up => self.step(false),
+            KeyCode::F(3) => {
                 let i = Mode::ALL
                     .iter()
                     .position(|&m| m == self.state.mode)
                     .unwrap_or(0);
-                let step = if ev.code == KeyCode::Tab {
-                    1
-                } else {
+                let step = if ev.modifiers.contains(KeyModifiers::SHIFT) {
                     Mode::ALL.len() - 1
+                } else {
+                    1
                 };
                 self.state.set_mode(Mode::ALL[(i + step) % Mode::ALL.len()]);
                 self.follow = false;
@@ -168,27 +243,23 @@ impl App {
                 self.follow = true;
                 self.follow_cursor();
             }
-            KeyCode::Up => {
-                self.selected = self.selected.saturating_sub(1);
-                self.offset = 0;
-            }
-            KeyCode::Down => {
-                self.selected = (self.selected + 1).min(self.sections().len().saturating_sub(1));
-                self.offset = 0;
-            }
             // `j` and `k` only mean something to vim after a prefix or operator.
             KeyCode::Char('j') if ev.modifiers.is_empty() && !pending => self.offset += 1,
             KeyCode::Char('k') if ev.modifiers.is_empty() && !pending => {
                 self.offset = self.offset.saturating_sub(1)
             }
             KeyCode::Enter => {
-                if let Some(&(category, _)) = self.sections().get(self.selected)
+                let sections = self.sections();
+                if let Some(&(category, _)) = sections.get(self.selected(&sections))
                     && !self.collapsed.remove(&category)
                 {
                     self.collapsed.insert(category);
                 }
             }
-            KeyCode::Backspace if pending => self.state.back(),
+            KeyCode::Backspace if pending => {
+                self.state.back();
+                self.follow_pending();
+            }
             _ => {
                 let Some(key) = zed_key(ev) else { return };
                 let mode = self.state.mode;
@@ -196,23 +267,25 @@ impl App {
                 if self.state.mode != mode {
                     self.follow = false;
                 }
+                self.note(format_args!("panel {key} -> {outcome:?}"));
                 if matches!(outcome, Outcome::Ran { .. } | Outcome::Unbound(_)) {
                     self.last = Some(outcome);
                 }
-                self.selected = self.selected.min(self.sections().len().saturating_sub(1));
+                self.follow_pending();
             }
         }
     }
 
     fn sections(&self) -> Vec<(Category, Vec<Entry>)> {
         let mut entries = self.state.entries(&self.keymap);
-        // Letters and digits first, `g` before `G`, then symbols, then named and modified keys.
+        // Letters first, `g` before `G`, then symbols, counts, and named and modified keys.
         entries.sort_by_cached_key(|e| {
             let base = e.key.strip_prefix("shift-").filter(|k| k.len() == 1);
             let base = base.unwrap_or(&e.key);
             let rank = match base.chars().next() {
-                _ if base.chars().count() > 1 => 2,
-                Some(c) if c.is_ascii_alphanumeric() => 0,
+                _ if base.chars().count() > 1 => 3,
+                Some(c) if c.is_ascii_alphabetic() => 0,
+                Some(c) if c.is_ascii_digit() => 2,
                 _ => 1,
             };
             (
@@ -233,24 +306,98 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
-        let [header, body, detail, help] = Layout::vertical([
+        let area = frame.area();
+        let tabs = area.width >= TABS_RATIO * area.height;
+        let help_text = if tabs { TABS_HELP } else { HELP };
+        let header = self.header();
+        // Beside the header when it fits, so a short panel keeps its rows for keys.
+        let beside = header.width() + 2 + help_text.chars().count() <= area.width as usize;
+        let [top, bar, body, detail, help] = Layout::vertical([
             Constraint::Length(1),
+            Constraint::Length(tabs as u16),
             Constraint::Min(0),
             Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(if beside { 0 } else { 1 }),
         ])
-        .areas(frame.area());
-        frame.render_widget(Paragraph::new(self.header()), header);
-        let (lines, selected_at, rows) = self.body(body.width as usize);
-        // The selected title on top, scrolled at most through its own section.
-        let last = lines.len().saturating_sub(body.height as usize);
-        let scroll = (selected_at + self.offset.min(rows)).min(last);
-        self.offset = scroll.saturating_sub(selected_at);
-        frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), body);
+        .areas(area);
+        if tabs {
+            frame.render_widget(Paragraph::new(self.tab_bar(bar.width as usize)), bar);
+        }
+        let help_line = Line::from(help_text.dim());
+        if beside {
+            frame.render_widget(Paragraph::new(help_line.right_aligned()), top);
+        } else {
+            frame.render_widget(Paragraph::new(help_line), help);
+        }
+        frame.render_widget(Paragraph::new(header), top);
+        self.render_body(frame, body, tabs);
         frame.render_widget(Paragraph::new(self.detail()), detail);
-        frame.render_widget(Paragraph::new(HELP.dim()), help);
     }
 
+    /// Each section's title and size, the selected one highlighted and,
+    /// when they do not all fit, the tabs before it dropped until it does.
+    fn tab_bar(&self, width: usize) -> Line<'static> {
+        let sections = self.sections();
+        let selected = self.selected(&sections);
+        let tabs: Vec<String> = sections
+            .iter()
+            .map(|(category, entries)| format!(" {} {} ", category.title(), entries.len()))
+            .collect();
+        let mut start = 0;
+        while start < selected
+            && tabs[start..=selected]
+                .iter()
+                .map(|t| t.chars().count() + 1)
+                .sum::<usize>()
+                > width
+        {
+            start += 1;
+        }
+        let mut spans = vec![];
+        if start > 0 {
+            spans.push("‹".dim());
+        }
+        for (i, tab) in tabs.into_iter().enumerate().skip(start) {
+            spans.push(if i == selected {
+                tab.bold().reversed()
+            } else {
+                tab.dim()
+            });
+            spans.push(" ".into());
+        }
+        Line::from(spans)
+    }
+
+    /// The columns from the selected section's title on, or from where the
+    /// last ones fit, `j` and `k` paging through the section's own columns.
+    fn render_body(&mut self, frame: &mut Frame, area: Rect, tabs: bool) {
+        let (columns, selected_at, span) = self.columns(area.height as usize, tabs);
+        let width = area.width as usize;
+        let mut last = columns.len().saturating_sub(1);
+        let mut used = columns.get(last).map_or(0, |c| c.1);
+        while last > 0 && used + columns[last - 1].1 <= width {
+            last -= 1;
+            used += columns[last].1;
+        }
+        let start = (selected_at + self.offset.min(span)).min(last);
+        self.offset = start.saturating_sub(selected_at);
+        let mut x = area.x;
+        for (lines, w) in columns.into_iter().skip(start) {
+            if x >= area.right() {
+                break;
+            }
+            let w = (w as u16).min(area.right() - x);
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect {
+                    x,
+                    width: w,
+                    ..area
+                },
+            );
+            x += w;
+        }
+    }
     fn header(&self) -> Line<'_> {
         let vim_mode = self.state.vim_mode();
         let color = match (vim_mode, self.state.mode) {
@@ -286,53 +433,98 @@ impl App {
         Line::from(spans)
     }
 
-    /// The sections as lines, the line of the selected section's title and
-    /// the number of lines under it.
-    fn body(&self, width: usize) -> (Vec<Line<'static>>, usize, usize) {
-        let mut lines = vec![];
-        let mut selected_at = 0;
-        let mut rows = 0;
-        for (i, (category, entries)) in self.sections().into_iter().enumerate() {
-            let open = !self.collapsed.contains(&category);
-            let title = format!(
-                "{} {} ({})",
-                if open { '▾' } else { '▸' },
-                category.title(),
-                entries.len()
-            );
-            let mut style = Style::new().bold();
-            if i == self.selected {
-                style = style.add_modifier(Modifier::REVERSED);
-                selected_at = lines.len();
+    /// The sections, or with `tabs` the selected one, flowed top to bottom
+    /// into columns `height` rows tall, the column with the selected section's
+    /// title and how many columns its section runs on past that one.
+    fn columns(&self, height: usize, tabs: bool) -> (Vec<Column>, usize, usize) {
+        let height = height.max(1);
+        let sections = self.sections();
+        let selected = self.selected(&sections);
+        // Each column's first section and its titles and entries, by section.
+        let mut flow: Vec<(usize, Vec<_>)> = vec![];
+        for (i, (category, entries)) in sections.iter().enumerate() {
+            // A tab shows its section alone, untitled and never folded.
+            if tabs && i != selected {
+                continue;
             }
-            lines.push(Line::from(Span::styled(title, style)));
-            if open {
-                let grid = grid(&entries, width, self.state.mac(), &self.taken);
-                if i == self.selected {
-                    rows = grid.len();
+            let open = tabs || !self.collapsed.contains(category);
+            let title = (!tabs).then_some(None);
+            let items = title
+                .into_iter()
+                .chain(entries.iter().filter(|_| open).map(Some));
+            for item in items {
+                // A title never ends a column its entries do not start.
+                let need = if item.is_none() && open && !entries.is_empty() {
+                    2
+                } else {
+                    1
+                };
+                match flow.last_mut() {
+                    Some((_, col)) if col.len() + need <= height => col.push((i, item)),
+                    _ => flow.push((i, vec![(i, item)])),
                 }
-                lines.extend(grid);
             }
         }
-        (lines, selected_at, rows)
+        let selected_at = flow
+            .iter()
+            .position(|(_, col)| col.contains(&(selected, None)))
+            .unwrap_or(0);
+        let span = flow[selected_at..]
+            .iter()
+            .skip(1)
+            .take_while(|(first, _)| *first == selected)
+            .count();
+        let mac = self.state.mac();
+        let columns = flow
+            .into_iter()
+            .map(|(_, col)| {
+                let keys: Vec<String> = col
+                    .iter()
+                    .map(|(_, e)| e.map(|e| vim::display(&e.key, mac)).unwrap_or_default())
+                    .collect();
+                let key_w = keys.iter().map(|k| k.chars().count()).max().unwrap_or(1);
+                let key_w = key_w.clamp(1, MAX_KEY);
+                let label_w = col
+                    .iter()
+                    .filter_map(|(_, e)| e.map(|e| e.label.chars().count()))
+                    .max()
+                    .unwrap_or(0)
+                    .min(MAX_LABEL);
+                let mut width = key_w + 3 + label_w;
+                let lines = col
+                    .iter()
+                    .zip(&keys)
+                    .map(|(&(i, e), key)| match e {
+                        Some(e) => cell(e, key, key_w, label_w, &self.taken),
+                        None => {
+                            let (category, entries) = &sections[i];
+                            let open = !self.collapsed.contains(category);
+                            let title = format!(
+                                "{} {} ({})",
+                                if open { '▾' } else { '▸' },
+                                category.title(),
+                                entries.len()
+                            );
+                            width = width.max(title.chars().count());
+                            let mut style = Style::new().bold();
+                            if i == selected {
+                                style = style.add_modifier(Modifier::REVERSED);
+                            }
+                            Line::from(Span::styled(title, style))
+                        }
+                    })
+                    .collect();
+                (lines, width + 2)
+            })
+            .collect();
+        (columns, selected_at, span)
     }
 
     fn detail(&self) -> Line<'_> {
         match &self.last {
-            Some(Outcome::Ran {
-                keys,
-                label,
-                action,
-                context,
-            }) => {
-                let mut spans = vec![format!("{keys} → {label}").bold()];
-                if !action.is_empty() {
-                    spans.push(format!("  {action}").cyan());
-                }
-                if !context.is_empty() {
-                    spans.push(format!("  [{context}]").dim());
-                }
-                Line::from(spans)
+            // The action and its context are in the event log.
+            Some(Outcome::Ran { keys, label, .. }) => {
+                Line::from(format!("{keys} → {label}").bold())
             }
             Some(Outcome::Unbound(keys)) => Line::from(format!("{keys} is not bound here").red()),
             _ => match &self.notice {
@@ -343,64 +535,44 @@ impl App {
     }
 }
 
+/// A column's lines and width.
+type Column = (Vec<Line<'static>>, usize);
+
 const MAX_KEY: usize = 12;
 const MAX_LABEL: usize = 30;
 
-/// Entries flowed into as many columns as fit, filled top to bottom. Keys
-/// another app takes are struck out and say which app.
-fn grid(
-    entries: &[Entry],
-    width: usize,
-    mac: bool,
+/// One entry as its column draws it. Keys another app takes are struck out
+/// and say which app.
+fn cell(
+    e: &Entry,
+    key: &str,
+    key_w: usize,
+    label_w: usize,
     taken: &BTreeMap<String, String>,
-) -> Vec<Line<'static>> {
-    let keys: Vec<String> = entries.iter().map(|e| vim::display(&e.key, mac)).collect();
-    let key_w = keys
-        .iter()
-        .map(|k| k.chars().count())
-        .max()
-        .unwrap_or(1)
-        .min(MAX_KEY);
-    let label_w = entries
-        .iter()
-        .map(|e| e.label.chars().count())
-        .max()
-        .unwrap_or(1)
-        .min(MAX_LABEL);
-    let cell_w = key_w + 3 + label_w + 2;
-    let cols = (width / cell_w).max(1);
-    let rows = entries.len().div_ceil(cols);
-    (0..rows)
-        .map(|r| {
-            let mut spans = vec![];
-            for c in 0..cols {
-                let Some(e) = entries.get(c * rows + r) else {
-                    break;
-                };
-                let color = match e.kind {
-                    Kind::Group(_) => Color::Magenta,
-                    Kind::Operator => Color::Yellow,
-                    Kind::Action => Color::Cyan,
-                };
-                let key = format!("{:>key_w$}", fit(&keys[c * rows + r], key_w));
-                if let Some(command) = taken.get(&e.key) {
-                    spans.push(key.crossed_out().fg(Color::Red));
-                    spans.push(" → ".dim());
-                    let label = format!("tess {command}: {}", e.label);
-                    spans.push(format!("{:<w$}", fit(&label, label_w), w = label_w + 2).dim());
-                    continue;
-                }
-                spans.push(key.bold().fg(color));
-                spans.push(" → ".dim());
-                let label = format!("{:<w$}", fit(&e.label, label_w), w = label_w + 2);
-                spans.push(match e.kind {
-                    Kind::Group(_) => label.fg(Color::Magenta),
-                    _ => label.into(),
-                });
-            }
-            Line::from(spans)
-        })
-        .collect()
+) -> Line<'static> {
+    let key = format!("{:>key_w$}", fit(key, key_w));
+    if let Some(command) = taken.get(&e.key) {
+        let label = format!("tess {command}: {}", e.label);
+        return Line::from(vec![
+            key.crossed_out().fg(Color::Red),
+            " → ".dim(),
+            fit(&label, label_w).dim(),
+        ]);
+    }
+    let color = match e.kind {
+        Kind::Group(_) => Color::Magenta,
+        Kind::Operator => Color::Yellow,
+        Kind::Action => Color::Cyan,
+    };
+    let label = fit(&e.label, label_w);
+    Line::from(vec![
+        key.bold().fg(color),
+        " → ".dim(),
+        match e.kind {
+            Kind::Group(_) => label.fg(Color::Magenta),
+            _ => label.into(),
+        },
+    ])
 }
 
 fn fit(s: &str, w: usize) -> String {
@@ -422,6 +594,11 @@ pub fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|home| std::fs::read_to_string(format!("{home}/.config/zed/keymap.json")).ok());
     let (keymap, notice) = crate::whichkey::with_user(os, user.as_deref());
+    if let Some(path) = crate::log::default_path()
+        && let Err(e) = crate::log::open(&path)
+    {
+        eprintln!("wkey: no event log at {}: {e}", path.display());
+    }
     let mut app = App::new(keymap, os);
     app.notice = notice;
     app.taken = crate::whichkey::installed_tess_keys();
@@ -433,6 +610,10 @@ pub fn main() -> anyhow::Result<()> {
         }
         Err(_) => {}
     }
+    crate::log::event(format_args!(
+        "start os={os} keys watched={} notice={:?}",
+        app.keys, app.notice
+    ));
     use ratatui::crossterm::{event, execute};
     let mut terminal = ratatui::init();
     // Zed's terminal reports focus, which tells keys for the panel from keys for Zed.
@@ -467,6 +648,9 @@ fn run(
                 .and_then(Cursor::from_json)
             {
                 app.on_cursor(c);
+            } else {
+                let text = String::from_utf8_lossy(&bytes);
+                crate::log::event(format_args!("cursor file unreadable: {text}"));
             }
             seen = bytes;
         }
@@ -558,16 +742,83 @@ mod tests {
     }
 
     #[test]
-    fn wide_terminals_use_columns() {
-        let narrow = screen(&mut app(), 40, 200);
-        let wide = screen(&mut app(), 160, 200);
-        let row_with =
-            |s: &[String], a: &str, b: &str| s.iter().any(|r| r.contains(a) && r.contains(b));
-        assert!(!row_with(&narrow, "next word start", "previous word start"));
+    fn short_wide_panels_show_one_section_per_tab() {
+        let mut a = app();
+        let s = screen(&mut a, 200, 12);
         assert!(
-            narrow.iter().filter(|r| !r.trim().is_empty()).count()
-                > wide.iter().filter(|r| !r.trim().is_empty()).count()
+            s[1].contains(" Edit 26 ") && s[1].contains(" Files ") && s[1].contains(" App "),
+            "{}",
+            s[1]
         );
+        assert!(
+            shows(&s, "u → undo") && !shows(&s, "d → delete"),
+            "{}",
+            s.join("\n")
+        );
+        // The help moves beside the header when it fits.
+        assert!(
+            s[0].contains("NORMAL") && s[0].contains("ctrl-c quit"),
+            "{}",
+            s[0]
+        );
+        assert!(s[0].contains("⇥ ⇧⇥ tab"), "{}", s[0]);
+        a.on_key(key(KeyCode::Tab));
+        let s = screen(&mut a, 200, 12);
+        assert!(
+            shows(&s, "d → delete") && !shows(&s, "u → undo"),
+            "{}",
+            s.join("\n")
+        );
+        // Scroll is folded, but a tab always shows its keys.
+        for _ in 0..4 {
+            a.on_key(key(KeyCode::Tab));
+        }
+        let s = screen(&mut a, 200, 12);
+        assert!(
+            s[1].contains(" Scroll 11 ") && shows(&s, "⌃F → page down"),
+            "{}",
+            s.join("\n")
+        );
+        // Taller panels keep the sections stacked, the help below.
+        let tall = screen(&mut app(), 60, 20);
+        assert!(tall[1].contains("▾ Edit"), "{}", tall[1]);
+        assert!(tall[19].contains("⇥ ↑↓ section"), "{}", tall[19]);
+    }
+
+    #[test]
+    fn pending_keys_pick_the_tab_until_one_is_picked() {
+        let mut a = app();
+        a.on_key(key(KeyCode::Tab)); // Operators, by hand
+        a.on_focus(false); // back to Zed
+        a.on_zed_key(ch('d'));
+        let s = screen(&mut a, 200, 12);
+        assert!(
+            shows(&s, "w → next word start") && shows(&s, "i → inner object"),
+            "{}",
+            s.join("\n")
+        );
+        a.on_zed_key(ch('i'));
+        assert!(shows(&screen(&mut a, 200, 12), "w → word"));
+        a.on_zed_key(ch('w'));
+        let s = screen(&mut a, 200, 12);
+        assert!(
+            shows(&s, "d → delete") && shows(&s, "d i w → delete inner word"),
+            "{}",
+            s.join("\n")
+        );
+        // A tab picked while keys wait wins over what they call for.
+        a.on_zed_key(ch('d'));
+        assert!(shows(&screen(&mut a, 200, 12), "w → next word start"));
+        a.on_key(key(KeyCode::BackTab));
+        assert!(!shows(&screen(&mut a, 200, 12), "w → next word start"));
+    }
+
+    #[test]
+    fn the_tab_bar_keeps_the_selected_tab_in_view() {
+        let mut a = app();
+        a.on_key(key(KeyCode::BackTab)); // wraps to the last tab, App
+        let s = screen(&mut a, 80, 12);
+        assert!(s[1].starts_with('‹') && s[1].contains(" App "), "{}", s[1]);
     }
 
     #[test]
@@ -580,7 +831,7 @@ mod tests {
         a.on_key(ch('g'));
         let s = screen(&mut a, 120, 60);
         assert!(shows(&s, "g g → start of document"), "{}", s.join("\n"));
-        assert!(shows(&s, "vim::StartOfDocument"));
+        assert!(!shows(&s, "vim::StartOfDocument"), "actions are in the log");
         a.on_key(ch('d'));
         a.on_key(key(KeyCode::Backspace));
         assert!(a.state.operators.is_empty());
@@ -592,30 +843,34 @@ mod tests {
     fn enter_folds_the_selected_section() {
         let mut a = app();
         let open = screen(&mut a, 120, 60);
-        assert!(open[1].contains("▾ Operators"), "{}", open[1]);
+        assert!(open[1].contains("▾ Edit"), "{}", open[1]);
         assert!(shows(&screen(&mut a, 120, 300), "▸ Scroll"));
         a.on_key(key(KeyCode::Enter));
         let folded = screen(&mut a, 120, 60);
-        assert!(folded[1].contains("▸ Operators"), "{}", folded[1]);
-        assert!(!shows(&folded, "d → delete"));
+        assert!(folded[1].contains("▸ Edit"), "{}", folded[1]);
+        assert!(!shows(&folded, "u → undo"));
         a.on_key(key(KeyCode::Down));
         a.on_key(key(KeyCode::Up));
         a.on_key(key(KeyCode::Enter));
-        assert!(shows(&screen(&mut a, 120, 60), "d → delete"));
+        assert!(shows(&screen(&mut a, 120, 60), "u → undo"));
     }
 
     #[test]
-    fn j_and_k_scroll_the_selected_section_unless_vim_waits() {
+    fn j_and_k_page_the_selected_section_unless_vim_waits() {
         let mut a = app();
         a.on_key(key(KeyCode::Down));
+        a.on_key(key(KeyCode::Down));
         let top = screen(&mut a, 40, 12);
-        assert!(top[1].contains("Motions"), "{}", top[1]);
+        assert!(shows(&top, "▾ Motions"), "{}", top.join("\n"));
         a.on_key(ch('j'));
-        a.on_key(ch('j'));
-        let down = screen(&mut a, 40, 12);
-        assert_eq!(down[1], top[3]);
+        let next = screen(&mut a, 40, 12);
+        assert!(
+            !shows(&next, "▾ Motions") && shows(&next, " → "),
+            "{}",
+            next.join("\n")
+        );
         a.on_key(ch('k'));
-        assert_eq!(screen(&mut a, 40, 12)[1], top[2]);
+        assert_eq!(screen(&mut a, 40, 12), top);
         // Past the section's end `j` stops, so one `k` always moves back.
         for _ in 0..500 {
             a.on_key(ch('j'));
@@ -655,7 +910,7 @@ mod tests {
             "{}",
             s[0]
         );
-        a.on_key(key(KeyCode::Tab));
+        a.on_key(key(KeyCode::F(3)));
         assert_eq!(a.state.mode, Mode::Visual);
         assert!(!a.follow);
         a.on_cursor(Cursor {

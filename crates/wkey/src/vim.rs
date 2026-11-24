@@ -174,18 +174,27 @@ fn words(camel: &str) -> String {
     out
 }
 
-/// Sections in the order they are shown: what edits text first.
+/// Sections in the order they are shown: vim's, what edits text first,
+/// then Zed's own commands by task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
+    Edit,
     Operators,
     Motions,
     Objects,
-    Edit,
     Modes,
     Prefixes,
-    Editor,
     Scroll,
-    Workspace,
+    Files,
+    Search,
+    Code,
+    Git,
+    Panes,
+    Text,
+    Selection,
+    Cursor,
+    Ai,
+    App,
 }
 
 impl Category {
@@ -198,10 +207,42 @@ impl Category {
             Category::Modes => "Modes",
             Category::Scroll => "Scroll",
             Category::Edit => "Edit",
-            Category::Editor => "Editor",
-            Category::Workspace => "Workspace",
+            Category::Files => "Files",
+            Category::Search => "Search",
+            Category::Code => "Code",
+            Category::Git => "Git",
+            Category::Panes => "Panes",
+            Category::Text => "Text",
+            Category::Selection => "Selection",
+            Category::Cursor => "Cursor",
+            Category::Ai => "AI",
+            Category::App => "App",
         }
     }
+}
+
+/// The task each of Zed's editor and workspace actions in the bundled
+/// keymaps serves.
+static GROUPS: std::sync::LazyLock<serde_json::Map<String, Value>> =
+    std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("groups.json")).expect("groups.json is JSON")
+    });
+
+/// The section for one of Zed's own actions, or `None` when it is not listed.
+fn group(action: &str) -> Option<Category> {
+    Some(match GROUPS.get(action)?.as_str()? {
+        "files" => Category::Files,
+        "search" => Category::Search,
+        "code" => Category::Code,
+        "git" => Category::Git,
+        "layout" => Category::Panes,
+        "text" => Category::Text,
+        "selection" => Category::Selection,
+        "cursor" => Category::Cursor,
+        "ai" => Category::Ai,
+        "app" => Category::App,
+        _ => return None,
+    })
 }
 
 pub fn category(action: &str, args: &Value) -> Category {
@@ -209,13 +250,15 @@ pub fn category(action: &str, args: &Value) -> Category {
         // Operators that wait for a character are motions or edits in use.
         return match op.id {
             "f" | "F" | "t" | "T" | "s" | "S" | "'" | "`" => Category::Motions,
-            "a" | "i" => Category::Objects,
+            // Text objects start where motions go, after an operator.
+            "a" | "i" => Category::Motions,
             "r" | "^K" | "^V" | "\"" | "q" | "@" | "m" => Category::Edit,
             _ => Category::Operators,
         };
     }
     let (namespace, name) = action.split_once("::").unwrap_or(("", action));
-    let scroll = name.starts_with("Scroll") || matches!(name, "LineUp" | "LineDown");
+    let scroll =
+        name.starts_with("Scroll") || matches!(name, "LineUp" | "LineDown" | "PageUp" | "PageDown");
     match namespace {
         "vim" if MOTIONS.contains(&name) => Category::Motions,
         "vim" if OBJECTS.contains(&name) => Category::Objects,
@@ -230,8 +273,13 @@ pub fn category(action: &str, args: &Value) -> Category {
         }
         "vim" => Category::Edit,
         "editor" if scroll => Category::Scroll,
-        "editor" => Category::Editor,
-        _ => Category::Workspace,
+        // ponytail: unlisted actions (a newer Zed, Linux-only keys, a user's
+        // own) go by namespace; list them in groups.json to place them.
+        _ => group(action).unwrap_or(if namespace == "editor" {
+            Category::Text
+        } else {
+            Category::App
+        }),
     }
 }
 
@@ -471,7 +519,7 @@ mod tests {
         let cat = |a: &str| category(a, &Value::Null);
         assert_eq!(cat("vim::PushYank"), Category::Operators);
         assert_eq!(cat("vim::PushFindForward"), Category::Motions);
-        assert_eq!(cat("vim::PushObject"), Category::Objects);
+        assert_eq!(cat("vim::PushObject"), Category::Motions);
         assert_eq!(cat("vim::PushRegister"), Category::Edit);
         assert_eq!(cat("vim::NextWordStart"), Category::Motions);
         assert_eq!(cat("vim::MoveToNextMatch"), Category::Motions);
@@ -480,8 +528,12 @@ mod tests {
         assert_eq!(cat("vim::ToggleVisualLine"), Category::Modes);
         assert_eq!(cat("vim::ScrollDown"), Category::Scroll);
         assert_eq!(cat("vim::Undo"), Category::Edit);
-        assert_eq!(cat("editor::GoToDefinition"), Category::Editor);
-        assert_eq!(cat("pane::DeploySearch"), Category::Workspace);
+        assert_eq!(cat("editor::GoToDefinition"), Category::Code);
+        assert_eq!(cat("pane::DeploySearch"), Category::Search);
+        assert_eq!(cat("workspace::Save"), Category::Files);
+        assert_eq!(cat("vim::PageDown"), Category::Scroll);
+        assert_eq!(cat("editor::SomethingNew"), Category::Text);
+        assert_eq!(cat("someone::Else"), Category::App);
         assert_eq!(Category::Objects.title(), "Text objects");
     }
 
