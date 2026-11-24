@@ -4,23 +4,19 @@
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-Which-key for Zed's vim mode. A terminal panel beside the editor lists every
-key you can press next in the vim state at your cursor, in folding sections,
-flowed into columns and colored by kind: operators, motions, text objects,
-edits, mode switches, prefixes, editor actions, scrolling (folded at start)
-and workspace actions. On macOS modifiers read as the menus draw them, so
-`alt-cmd-g` is `⌥⌘G`.
+Which-key for Zed's vim mode. A terminal panel beside or below the editor
+lists every key you can press next in the vim state at your cursor, in
+folding sections colored by kind. Vim's come first: edits, operators,
+motions, text objects, mode switches, prefixes and scrolling (folded at
+start). Zed's own commands follow by task: files, search, code, git, panes,
+text, selection, cursor, AI and the app. The sections flow top to bottom into
+columns; a short, wide panel, as the bottom dock makes, shows one section at a
+time under a row of tabs. After an operator such as `d` the view turns to the
+motions, after `d i` to the text objects, and a finished command reads in
+full, `d i w → delete inner word`. On macOS modifiers read as the menus draw
+them, so `alt-cmd-g` is `⌥⌘G`.
 
-```
- OPERATOR  d   main.rs:12:5  following Zed
-▾ Operators (11)
-' → jump to mark line   a → around object       i → inner object        T → till char backward
-@ → replay macro        F → find char backward  m → set mark            t → till char
-▾ Motions (48)
-    $ → end of line                         G → end of document
-    ...
-d i w → word  vim::Word  [vim_operator == a || vim_operator == i || ...]
-```
+![wkey in the bottom panel of Zed, after typing d in a Lean file](assets/screenshot.png)
 
 It reads the same keymaps Zed does (Zed's defaults and vim keymap, then your
 `~/.config/zed/keymap.json`) and picks the winning binding with Zed's own
@@ -75,7 +71,8 @@ and a binding to `~/.config/zed/keymap.json`:
 
 The key opens the view without taking focus from the editor; pressing it
 again restarts the view in the same terminal, and `ctrl-c` in the view closes
-it. `"terminal": { "dock": "right" }` puts it beside the code.
+it. In the bottom dock each section gets a tab; `"terminal": { "dock":
+"right" }` puts the view beside the code with the sections stacked.
 
 ## Use
 
@@ -88,10 +85,11 @@ enabled it at the bottom.
 
 | Key | Does |
 | --- | --- |
-| `tab`, `shift-tab` | pick the mode by hand (normal, insert, visual, replace) |
+| `tab`, `shift-tab`, `up`, `down` | next or previous section (or tab) |
+| `enter` | fold or unfold the selected section |
+| `f3`, `shift-f3` | cycle the vim mode by hand (normal, insert, visual, replace) |
 | `f2` | follow Zed's mode again |
-| `up`, `down`, `enter` | select a section, fold or unfold it |
-| `j`, `k` | scroll through the selected section, unless a prefix or operator waits |
+| `j`, `k` | page through the selected section's columns, unless a prefix or operator waits |
 | `backspace` | undo the last pending key or operator |
 | `ctrl-c` | quit |
 
@@ -100,17 +98,26 @@ Everything else, including `esc`, goes to the simulated vim.
 ## Limits
 
 Without Input Monitoring, and on Linux, wkey guesses the mode from your edits
-and can get it wrong; pick it with `tab`. Keys typed into Zed's command
+and can get it wrong; pick it with `f3`. Keys typed into Zed's command
 palette, file finder or panels also reach the simulated vim; `esc` puts it
 right. Keys held with ctrl, alt or cmd are read on a US layout. Only a plain
 focused editor is modeled, so bindings for menus, completions and panels do
 not show, and only the default `base_keymap` is supported.
+
+When the view gets the mode or a key wrong, `events.log` beside the cursor
+file (`$XDG_RUNTIME_DIR/wkey/` or `~/.cache/wkey/`) has what it saw: each key
+macOS reported, each key typed with what the simulated vim did, and every
+cursor update. It starts over once it passes 1 MB.
 
 ## Development
 
 ```sh
 cargo test --workspace
 ```
+
+Zed's own commands get their sections from `crates/wkey/src/groups.json`,
+which maps each action in the bundled keymaps to a task. Actions missing
+from it go to Text (`editor::`) or App (the rest).
 
 The bundled keymaps in `crates/wkey/keymaps` are Zed v1.28.1's
 `assets/keymaps`, which are GPL-3.0-or-later, and so is wkey.
