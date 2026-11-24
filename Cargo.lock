@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "wkey-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ratatui",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "zed-wkey"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "zed_extension_api",
 ]
