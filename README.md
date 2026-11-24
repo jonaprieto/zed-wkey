@@ -30,10 +30,10 @@ cargo install --path crates/wkey
 ```
 
 Then in Zed run `zed: install dev extension` and pick this directory. The
-extension starts `wkey lsp` next to each language's own server (see
-`extension.toml` for the languages). It answers nothing; it only watches the
-cursor. To use a binary that is not on `PATH`, set both its path and its
-argument, since Zed then runs it as is:
+extension starts `wkey lsp` next to the Lean language server, in Lean 4 files
+only. It answers nothing; it only watches the cursor. To use a binary that is
+not on `PATH`, set both its path and its argument, since Zed then runs it as
+is:
 
 ```json
 "lsp": { "wkey": { "binary": { "path": "/path/to/wkey", "arguments": ["lsp"] } } }
@@ -98,7 +98,8 @@ Everything else, including `esc`, goes to the simulated vim.
 ## Limits
 
 Without Input Monitoring, and on Linux, wkey guesses the mode from your edits
-and can get it wrong; pick it with `f3`. Keys typed into Zed's command
+and can get it wrong; pick it with `f3`. Outside Lean 4 files wkey does not
+see the cursor or the file, only the keys. Keys typed into Zed's command
 palette, file finder or panels also reach the simulated vim; `esc` puts it
 right. Keys held with ctrl, alt or cmd are read on a US layout. Only a plain
 focused editor is modeled, so bindings for menus, completions and panels do

@@ -1,18 +1,13 @@
 id = "wkey"
 name = "wkey"
-version = "0.2.0"
+version = "0.2.1"
 schema_version = 1
 description = "Which-key for Zed's vim mode: the bindings at your cursor, in a terminal beside the editor."
 repository = "https://github.com/jonaprieto/zed-wkey"
 authors = ["Jonathan Prieto-Cubides <prieto.jona@gmail.com>"]
 
-# wkey answers no requests; it runs next to each language's own server to see
-# the cursor. Add a language here to follow the cursor in it.
+# wkey answers no requests; it runs next to the Lean language server to see
+# the cursor in Lean 4 files.
 [language_servers.wkey]
 name = "wkey"
-languages = [
-  "C", "C++", "CSS", "Diff", "Elixir", "Git Commit", "Go", "Go Mod", "HTML",
-  "Haskell", "Java", "JavaScript", "JSON", "JSONC", "Lean 4", "Lua", "Markdown",
-  "Nix", "Plain Text", "Python", "Ruby", "Rust", "Shell Script", "TOML", "TSX",
-  "TypeScript", "YAML", "Zig",
-]
+languages = ["Lean 4"]
