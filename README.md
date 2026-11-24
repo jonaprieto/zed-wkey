@@ -25,9 +25,19 @@ disables a key.
 
 ## Install
 
+Download the `wkey` binary for your machine from the
+[latest release](https://github.com/jonaprieto/zed-wkey/releases/latest)
+and put it on your `PATH`. Builds are there for macOS and Linux on Apple
+silicon or arm64 (`aarch64`) and Intel or AMD (`x86_64`). On an Apple silicon
+Mac:
+
 ```sh
-cargo install --path crates/wkey
+curl -L https://github.com/jonaprieto/zed-wkey/releases/latest/download/wkey-aarch64-apple-darwin.tar.gz | tar -xz -C ~/.local/bin
 ```
+
+Use `wkey-x86_64-apple-darwin`, `wkey-x86_64-unknown-linux-gnu` or
+`wkey-aarch64-unknown-linux-gnu` for the others. To build from source
+instead, run `cargo install --path crates/wkey`.
 
 Then in Zed run `zed: install dev extension` and pick this directory. The
 extension starts `wkey lsp` next to the Lean language server, in Lean 4 files
