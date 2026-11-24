@@ -1,5 +1,9 @@
 # wkey
 
+[![CI](https://github.com/jonaprieto/zed-wkey/actions/workflows/ci.yml/badge.svg)](https://github.com/jonaprieto/zed-wkey/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+
 Which-key for Zed's vim mode. A terminal panel beside the editor lists every
 key you can press next in the vim state at your cursor, in folding sections,
 flowed into columns and colored by kind: operators, motions, text objects,
@@ -38,6 +42,11 @@ argument, since Zed then runs it as is:
 ```json
 "lsp": { "wkey": { "binary": { "path": "/path/to/wkey", "arguments": ["lsp"] } } }
 ```
+
+On macOS wkey follows the keys you type into Zed. It only listens and never
+changes a key. The first run asks macOS to let Zed watch the keyboard: allow
+Zed under System Settings > Privacy & Security > Input Monitoring and restart
+Zed.
 
 Open the view from a Zed terminal with `wkey`. Extensions cannot ship global
 tasks or keybindings, so to open it with one key instead, add a task to
@@ -88,36 +97,14 @@ enabled it at the bottom.
 
 Everything else, including `esc`, goes to the simulated vim.
 
-## How wkey knows where you are
+## Limits
 
-Zed tells extensions nothing about vim. On macOS wkey watches the keys you
-type into Zed and plays them through the same keymaps. The watch only
-listens: it never changes a key, and it skips keys meant for other apps or
-for the wkey panel itself. The first run asks macOS to let Zed watch the
-keyboard; allow Zed under System Settings > Privacy & Security > Input
-Monitoring and restart Zed.
-
-`wkey lsp` adds what every language server sees: Zed asks it for code
-actions at the selection and sends it every edit. That gives the file and
-the cursor, and a selection means visual mode (the mouse makes those too).
-It writes them to `$XDG_RUNTIME_DIR/wkey/cursor.json` (or
-`~/.cache/wkey/cursor.json`), which the view rereads. Without the key watch
-(on Linux, or before Zed is allowed) the mode is a guess from edits: a
-cursor right after text just typed means insert mode, anything else normal
-mode. Escape out of insert mode then goes unseen, `O` reads as normal mode
-and replace mode is never detected.
-
-Keys that [tess](https://github.com/jonaprieto/tess) takes for itself never
-reach Zed, so when `tess` is installed wkey reads its key bindings
-(`tess default-config` and `~/.config/tess/config.json`) and strikes those
-keys out, naming the tess command that runs instead.
-
-Known gaps: keys typed into Zed's command palette, file finder or panels
-also reach the simulated vim, since the watch cannot tell them from the
-editor; `esc` puts it right. Keys held with ctrl, alt or cmd are read on a
-US layout. Pick the mode with `tab` when it is wrong. Only the contexts of a
-plain focused editor are modeled, so bindings for menus, completions and
-panels do not show. `base_keymap` other than the default is not supported.
+Without Input Monitoring, and on Linux, wkey guesses the mode from your edits
+and can get it wrong; pick it with `tab`. Keys typed into Zed's command
+palette, file finder or panels also reach the simulated vim; `esc` puts it
+right. Keys held with ctrl, alt or cmd are read on a US layout. Only a plain
+focused editor is modeled, so bindings for menus, completions and panels do
+not show, and only the default `base_keymap` is supported.
 
 ## Development
 
